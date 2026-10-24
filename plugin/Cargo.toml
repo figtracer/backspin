@@ -1,6 +1,6 @@
 [package]
 name = "backspin"
-description = "Time and volume mapping effect with 36+36 envelope slots."
+description = "A port of Image-Line Gross Beat as a CLAP and VST3 plugin."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,7 +14,5 @@ backspin-engine.workspace = true
 nih_plug.workspace = true
 nih_plug_egui.workspace = true
 parking_lot.workspace = true
+rtrb = "0.3"
 serde.workspace = true
-serde_json.workspace = true
-rfd = "0.15"
-hound = "3.5"

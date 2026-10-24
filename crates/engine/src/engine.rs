@@ -1,6 +1,6 @@
 //! The plugin object (`TTestPlug`): host calls, parameters, slot switching and MIDI.
 
-use crate::bank::{Bank, SLOTS};
+use crate::bank::{Bank, SLOTS, Slot};
 use crate::params::{NUM_PARAMS, PARAMS, smoothing_ms};
 use backspin_dsp::{DcFilter, DryDelay, OnePole, Resampler, Ring, coef};
 use backspin_envelope::{Cursor, curve_params, rne};
@@ -343,6 +343,53 @@ impl Engine {
         if self.playing {
             self.reactivate();
         }
+    }
+
+    /// The "Remove DC offset", "Smoothing attack compensation", "HQ resampling" and click
+    /// reduction menu items (TSynthResModule.CenterMenuClick 0x6d7d0): set the option bytes, then
+    /// recompute the taps setting and the smoothing, clear the declick state and recompute the
+    /// click constants.
+    pub fn set_options(&mut self, remove_dc: u8, attack_comp: u8, hq: u8, click: u8) {
+        self.remove_dc = remove_dc;
+        self.attack_comp = attack_comp;
+        self.hq = hq;
+        self.update_taps();
+        self.update_smoothing();
+        self.click = click;
+        self.prev_wet = [0.0; 2];
+        self.declick = [0.0; 2];
+        self.update_click();
+    }
+
+    /// Replaces a slot (the editor edits the slot object in place in the original) and returns
+    /// the old one in `slot`.
+    pub fn swap_slot(&mut self, bank: usize, index: usize, slot: &mut Slot) {
+        std::mem::swap(&mut self.banks[bank].slots[index], slot);
+    }
+
+    /// Takes the saved part of `other` (parameters, options, slots) as a state load does, and
+    /// leaves the replaced data in `other`. Nothing is allocated.
+    pub fn swap_state(&mut self, other: &mut Engine) {
+        self.params = other.params;
+        self.view_bank = other.view_bank;
+        [
+            self.remove_dc,
+            self.attack_comp,
+            self.hq,
+            self.view_scratch,
+            self.click,
+        ] = [
+            other.remove_dc,
+            other.attack_comp,
+            other.hq,
+            other.view_scratch,
+            other.click,
+        ];
+        self.midi_trigger = other.midi_trigger;
+        for b in 0..2 {
+            std::mem::swap(&mut self.banks[b].slots, &mut other.banks[b].slots);
+        }
+        self.finish_load();
     }
 
     /// ProcessParam (0x68f70). Returns the value.

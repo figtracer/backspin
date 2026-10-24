@@ -1,38 +1,85 @@
-//! Backspin: a time and volume mapping effect.
+//! Backspin: a port of Image-Line Gross Beat as a CLAP and VST3 plugin.
 //!
-//! This crate connects the [`backspin_engine`] to plugin hosts through nih-plug (CLAP and VST3)
-//! and provides the egui editor.
+//! The host mapping follows SPEC.md section 4: the host block is split at each MIDI note
+//! (decision 3), the song position is `pos_beats * 96` ticks (decision 4), offline rendering is
+//! `PM_HQ_NonRealtime` (decision 5), and the transport drives play, stop and song position changes
+//! (decision 6). The plugin reports 15 samples of latency.
 
 mod editor;
 mod params;
+mod shared;
 
-use backspin_engine::{Bank, Engine, NoteEvent as EngineNote, Status, Transport};
+use backspin_engine::{
+    Engine, LATENCY, NUM_PARAMS, PM_HQ_NON_REALTIME, PM_IS_RENDERING, REC_UPDATE_VALUE,
+};
 use nih_plug::prelude::*;
 use params::BackspinParams;
-use parking_lot::Mutex;
+use shared::{AudioQueues, Shared};
 use std::sync::Arc;
 
-const MAX_EVENTS: usize = 512;
+/// PPQ of the song position (the plugin's own default, decision 4).
+const PPQ: i32 = 96;
+/// The tempo when the host gives none.
+const DEFAULT_TEMPO: f64 = 120.0;
 
 /// The plugin.
 pub struct Backspin {
     params: Arc<BackspinParams>,
-    engine: Option<Engine>,
-    fallback: Bank,
-    status: Arc<Mutex<Status>>,
-    events: Vec<EngineNote>,
+    shared: Arc<Shared>,
+    queues: AudioQueues,
+    engine: Engine,
+    /// Interleaved stereo work buffer.
+    buf: Vec<[f32; 2]>,
+    sample_rate: f32,
+    /// Host parameter values last applied to the engine. MIDI can change the engine's slot
+    /// parameters, so changes are detected against the host values, not the engine values.
+    host_params: [i32; NUM_PARAMS],
+    tempo: f64,
+    playing: bool,
+    /// Song position in beats at the next block start, when the host gives one.
+    next_pos: Option<f64>,
+    /// Own song position in samples, for hosts without a position.
+    own_pos: u64,
 }
 
 impl Default for Backspin {
     fn default() -> Self {
-        let params = Arc::new(BackspinParams::default());
-        let fallback = params.bank.read().clone();
+        let (shared, queues) = Shared::new();
+        let shared = Arc::new(shared);
         Self {
-            params,
-            engine: None,
-            fallback,
-            status: Arc::new(Mutex::new(Status::default())),
-            events: Vec::with_capacity(MAX_EVENTS),
+            params: Arc::new(BackspinParams::new(shared.clone())),
+            shared,
+            queues,
+            engine: Engine::new(),
+            buf: Vec::new(),
+            sample_rate: 44100.0,
+            host_params: [0; NUM_PARAMS],
+            tempo: DEFAULT_TEMPO,
+            playing: false,
+            next_pos: None,
+            own_pos: 0,
+        }
+    }
+}
+
+impl Backspin {
+    /// The song position in ticks, `offset` samples after the block start.
+    fn ticks(&self, pos_beats: Option<f64>, offset: usize) -> f64 {
+        let beats = match pos_beats {
+            Some(b) => b,
+            None => self.own_pos as f64 * self.tempo / 60.0 / self.sample_rate as f64,
+        };
+        (beats + offset as f64 * self.tempo / 60.0 / self.sample_rate as f64) * PPQ as f64
+    }
+
+    /// Applies host parameter changes (FL calls ProcessParam between blocks).
+    fn apply_params(&mut self) {
+        for (i, p) in self.params.by_index().iter().enumerate() {
+            let v = p.value();
+            if v != self.host_params[i] {
+                self.host_params[i] = v;
+                self.engine.process_param(i, v, REC_UPDATE_VALUE);
+            }
         }
     }
 }
@@ -40,8 +87,8 @@ impl Default for Backspin {
 impl Plugin for Backspin {
     const NAME: &'static str = "Backspin";
     const VENDOR: &'static str = "figtracer";
-    const URL: &'static str = "https://github.com/figtracer/backspin";
-    const EMAIL: &'static str = "noreply@example.com";
+    const URL: &'static str = "";
+    const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[
@@ -68,31 +115,49 @@ impl Plugin for Backspin {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create(self.params.clone(), self.status.clone())
+        editor::create(self.params.clone(), self.shared.clone())
     }
 
+    /// Builds the audio engine in the order FL uses when it opens a plugin: sample rate, block
+    /// size, time signature, tempo, process mode, state, then the parameters.
     fn initialize(
         &mut self,
         _audio_io_layout: &AudioIOLayout,
         buffer_config: &BufferConfig,
         context: &mut impl InitContext<Self>,
     ) -> bool {
-        let mut engine = Engine::new(buffer_config.sample_rate);
-        engine.reset(&self.params.settings());
-        context.set_latency_samples(engine.latency());
-        self.engine = Some(engine);
-        {
-            let mut bank = self.params.bank.write();
-            bank.sanitize();
-            self.fallback = bank.clone();
-        }
+        context.set_latency_samples(LATENCY as u32);
+        self.sample_rate = buffer_config.sample_rate;
+        let block = buffer_config.max_buffer_size as usize;
+        let mut e = Engine::new();
+        e.set_song_ticks(0.0);
+        e.set_sample_rate(buffer_config.sample_rate.round() as i32);
+        e.set_block_size(block as i32);
+        e.set_time_sig(PPQ);
+        e.set_tempo(self.tempo as f32);
+        let offline = buffer_config.process_mode == ProcessMode::Offline;
+        e.set_process_mode(if offline {
+            PM_HQ_NON_REALTIME | PM_IS_RENDERING
+        } else {
+            0
+        });
+        let blob = self.shared.save_state();
+        e.load_state(&blob);
+        self.host_params = e.params;
+        self.engine = e;
+        self.apply_params();
+        // Commands sent before this point are already in the model.
+        while self.queues.commands.pop().is_ok() {}
+        self.buf = vec![[0.0; 2]; block];
+        self.playing = false;
+        self.next_pos = None;
+        self.own_pos = 0;
+        self.shared.status.publish(&self.engine);
         true
     }
 
     fn reset(&mut self) {
-        if let Some(engine) = &mut self.engine {
-            engine.reset(&self.params.settings());
-        }
+        self.engine.flush();
     }
 
     fn process(
@@ -101,63 +166,87 @@ impl Plugin for Backspin {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        let Some(engine) = &mut self.engine else { return ProcessStatus::Normal };
+        let n = buffer.samples();
+        if n == 0 {
+            return ProcessStatus::Normal;
+        }
+        self.queues.apply(&mut self.engine);
+        self.apply_params();
 
-        self.events.clear();
+        let transport = context.transport();
+        let pos = transport.pos_beats();
+        let tempo = transport.tempo.unwrap_or(DEFAULT_TEMPO);
+        if tempo != self.tempo {
+            self.tempo = tempo;
+            self.engine.set_song_ticks(self.ticks(pos, 0));
+            self.engine.set_tempo(tempo as f32);
+        }
+        let playing = transport.playing;
+        if playing != self.playing {
+            self.playing = playing;
+            self.own_pos = 0;
+            self.engine.set_song_ticks(self.ticks(pos, 0));
+            self.engine.set_playing(playing);
+        } else if let (true, Some(p), Some(want)) = (playing, pos, self.next_pos) {
+            // A jump in the song position (a loop or a seek) is FPD_SongPosChanged.
+            let tolerance = tempo / 60.0 / self.sample_rate as f64;
+            if (p - want).abs() > tolerance {
+                self.engine.set_song_ticks(self.ticks(pos, 0));
+                self.engine.song_pos_changed();
+            }
+        }
+        self.next_pos = pos.map(|p| p + n as f64 * tempo / 60.0 / self.sample_rate as f64);
+
+        let channels = buffer.channels();
+        {
+            let slices = buffer.as_slice();
+            for (i, f) in self.buf[..n].iter_mut().enumerate() {
+                let l = slices[0][i];
+                *f = [l, if channels > 1 { slices[1][i] } else { l }];
+            }
+        }
+        let mut start = 0;
         while let Some(event) = context.next_event() {
-            if self.events.len() >= MAX_EVENTS {
-                continue;
+            let msg = match event {
+                NoteEvent::NoteOn {
+                    channel,
+                    note,
+                    velocity,
+                    ..
+                } => {
+                    let vel = ((velocity * 127.0).round() as u32).clamp(1, 127);
+                    0x90 | channel as u32 | (note as u32) << 8 | vel << 16
+                }
+                NoteEvent::NoteOff { channel, note, .. } => {
+                    0x80 | channel as u32 | (note as u32) << 8
+                }
+                _ => continue,
+            };
+            let at = (event.timing() as usize).min(n);
+            if at > start {
+                self.engine.set_song_ticks(self.ticks(pos, start));
+                self.engine.render(&mut self.buf[start..at]);
+                start = at;
             }
-            match event {
-                NoteEvent::NoteOn { timing, note, velocity, .. } if velocity > 0.0 => {
-                    self.events.push(EngineNote { timing: timing as usize, note, on: true })
-                }
-                NoteEvent::NoteOn { timing, note, .. } | NoteEvent::NoteOff { timing, note, .. } => {
-                    self.events.push(EngineNote { timing: timing as usize, note, on: false })
-                }
-                _ => {}
+            self.engine.set_song_ticks(self.ticks(pos, start));
+            self.engine.midi_in(msg);
+        }
+        if start < n {
+            self.engine.set_song_ticks(self.ticks(pos, start));
+            self.engine.render(&mut self.buf[start..n]);
+        }
+        let slices = buffer.as_slice();
+        for (i, f) in self.buf[..n].iter().enumerate() {
+            slices[0][i] = f[0];
+            if channels > 1 {
+                slices[1][i] = f[1];
             }
         }
-
-        let t = context.transport();
-        let transport = Transport { playing: t.playing, tempo: t.tempo, pos_beats: t.pos_beats() };
-        let settings = self.params.settings();
-
-        let channels = buffer.as_slice();
-        let (left, right): (&mut [f32], &mut [f32]) = match channels {
-            [l, r, ..] => (l, r),
-            [mono] => {
-                // Mono: process a copy as the right channel and discard it.
-                let len = mono.len();
-                let mut scratch = [0.0f32; 4096];
-                let n = len.min(scratch.len());
-                scratch[..n].copy_from_slice(&mono[..n]);
-                if let Some(bank) = self.params.bank.try_read() {
-                    engine.process(&bank, &settings, &transport, &self.events, &mut mono[..n], &mut scratch[..n]);
-                } else {
-                    engine.process(&self.fallback, &settings, &transport, &self.events, &mut mono[..n], &mut scratch[..n]);
-                }
-                self.publish_status();
-                return ProcessStatus::Normal;
-            }
-            [] => return ProcessStatus::Normal,
-        };
-
-        if let Some(bank) = self.params.bank.try_read() {
-            engine.process(&bank, &settings, &transport, &self.events, left, right);
-        } else {
-            engine.process(&self.fallback, &settings, &transport, &self.events, left, right);
+        if playing {
+            self.own_pos += n as u64;
         }
-        self.publish_status();
+        self.shared.status.publish(&self.engine);
         ProcessStatus::Normal
-    }
-}
-
-impl Backspin {
-    fn publish_status(&self) {
-        if let (Some(engine), Some(mut status)) = (&self.engine, self.status.try_lock()) {
-            *status = engine.status();
-        }
     }
 }
 
@@ -166,14 +255,12 @@ impl ClapPlugin for Backspin {
     const CLAP_DESCRIPTION: Option<&'static str> = Some("Time and volume mapping effect");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
-    const CLAP_FEATURES: &'static [ClapFeature] =
-        &[ClapFeature::AudioEffect, ClapFeature::Stereo, ClapFeature::Mono, ClapFeature::Glitch];
+    const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Stereo];
 }
 
 impl Vst3Plugin for Backspin {
-    const VST3_CLASS_ID: [u8; 16] = *b"BackspinFigTrc01";
-    const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] =
-        &[Vst3SubCategory::Fx, Vst3SubCategory::Delay, Vst3SubCategory::Stereo];
+    const VST3_CLASS_ID: [u8; 16] = *b"BackspinGrossBt1";
+    const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[Vst3SubCategory::Fx];
 }
 
 nih_export_clap!(Backspin);

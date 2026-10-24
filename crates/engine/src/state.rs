@@ -136,6 +136,13 @@ impl Engine {
         if v > 8 {
             self.midi_trigger = (r.u8(0) != 0) as u8;
         }
+        self.finish_load();
+        r.pos()
+    }
+
+    /// The steps after a state load: re-apply every parameter, show the selected slots, refresh
+    /// the taps and click constants, and re-activate the banks if the transport plays.
+    pub(crate) fn finish_load(&mut self) {
         for i in 0..NUM_PARAMS {
             let value = self.process_param(i, 0, REC_GET_VALUE);
             self.process_param(i, value, REC_UPDATE_VALUE | REC_UPDATE_CONTROL);
@@ -148,7 +155,6 @@ impl Engine {
         if self.playing {
             self.reactivate();
         }
-        r.pos()
     }
 
     /// Saves the state blob (SaveRestoreState with `save = true`), version `0x90003`.
