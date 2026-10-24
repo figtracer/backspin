@@ -771,7 +771,7 @@ fn feature_cases(cases: &mut Vec<Case>, out_dir: &Path) -> Result<(), String> {
                 vec![ForceHold(0, b, 2), ForceHold(1, 3, 1), Click(click)],
                 vec![
                     format!("0.7b:{nb}:on"),
-                    format!("2.2b:27:on"),
+                    s("2.2b:27:on"),
                     format!("5.6b:{nc}:on"),
                 ],
                 a as i64,
