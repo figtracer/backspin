@@ -1,27 +1,24 @@
-//! The Backspin time and volume mapping engine.
+//! The Gross Beat engine (`TTestPlug`): state, parameters, slot switching, MIDI and the render
+//! callback, bit-exact with the original.
 //!
-//! Audio goes into a 2-bar ring buffer. The time lane's envelope sets how far back the read head
-//! is, and the volume lane's envelope sets the gain. Each lane has 36 slots that can be selected
-//! by parameter or by MIDI note. See `SPEC.md` for the full behavior.
-//!
-//! The engine is modular in two ways:
-//!
-//! - [`LaneState`] is generic slot selection (trigger sync, position sync, key-held, one-shot).
-//!   A new lane needs a slot list in [`Bank`] and a state in [`Engine`].
-//! - [`Stage`] lets new effects run after the built-in stages, with per-sample access to the lane
-//!   values (see [`StageContext`]).
+//! The host drives it like FL Studio drives the plugin: [`Engine::set_sample_rate`],
+//! [`Engine::set_block_size`], [`Engine::set_time_sig`], [`Engine::set_tempo`],
+//! [`Engine::set_process_mode`], state and parameters, [`Engine::set_playing`], then
+//! [`Engine::render`] per block. Before every call that can read the song position, the host sets
+//! it with [`Engine::set_song_ticks`] (the original asks the host with `FHD_GetMixingTime`).
 
 mod bank;
 mod engine;
-mod lane;
-mod presets;
+mod params;
+mod render;
+mod state;
 
-pub use bank::{Bank, ForceHold, LaneId, Slot, SlotSettings, Sync, SLOTS};
-pub use engine::{
-    apply_tension, ClickReduction, Engine, NoteEvent, Settings, Stage, StageContext, Status,
-    Transport, GUARD, MIN_TEMPO, TIME_RANGE_BEATS,
-};
-pub use lane::{next_grid, Activation, LaneState, Source};
-pub use presets::factory_bank;
-
+pub use backspin_dsp as dsp;
 pub use backspin_envelope as envelope;
+pub use bank::{Bank, SLOTS, Slot};
+pub use engine::{
+    Engine, LATENCY, PM_HQ_NON_REALTIME, PM_IS_RENDERING, REC_FROM_MIDI, REC_GET_VALUE,
+    REC_UPDATE_CONTROL, REC_UPDATE_VALUE,
+};
+pub use params::{NUM_PARAMS, PARAMS, ParamInfo, param_text};
+pub use state::{STATE_VERSION, StateError, fst_state};

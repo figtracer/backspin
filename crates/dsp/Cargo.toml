@@ -1,6 +1,6 @@
 [package]
 name = "backspin-dsp"
-description = "DSP building blocks: ring buffer, interpolators, smoothers."
+description = "The Gross Beat audio building blocks: ring buffer, read head, smoothers, DC filter."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

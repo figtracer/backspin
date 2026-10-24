@@ -1,79 +1,75 @@
-//! Stereo ring buffer addressed by absolute frame index.
+//! The recording ring buffer (TBRDelay_32FS, dsp.md section 2).
 
-use crate::Frame;
+/// Frames mirrored on each side of the ring, so the interpolator can read past either end.
+pub const GUARD: usize = 16;
 
-/// A stereo ring buffer. Frames are addressed by their absolute index since the last clear.
-///
-/// Reads outside the recorded range return silence.
-#[derive(Clone, Debug)]
+/// A ring of stereo f32 frames with mirrored guard frames, laid out like the original:
+/// `GUARD` mirror frames, `len` ring frames, `GUARD` mirror frames.
+#[derive(Clone, Debug, Default)]
 pub struct Ring {
-    buf: Vec<Frame>,
-    mask: usize,
-    written: u64,
+    data: Vec<[f32; 2]>,
+    len: usize,
+    /// Write position in ring frames, `0..=len`.
+    write: usize,
 }
 
 impl Ring {
-    /// Creates a ring that holds at least `min_capacity` frames.
-    pub fn new(min_capacity: usize) -> Self {
-        let cap = min_capacity.max(16).next_power_of_two();
-        Self { buf: vec![[0.0; 2]; cap], mask: cap - 1, written: 0 }
+    /// Sizes the ring for `block` frames and a delay range of `delay` frames (0x24a230 with
+    /// guard 16). The ring has `delay + block + 2 * GUARD` frames, all zero, and the write
+    /// position is `GUARD + delay`.
+    pub fn resize(&mut self, block: usize, delay: usize) {
+        let total = 4 * GUARD + delay + block;
+        self.len = total - 2 * GUARD;
+        self.data.clear();
+        self.data.resize(self.len + 2 * GUARD, [0.0; 2]);
+        self.write = GUARD + delay;
     }
 
-    /// Returns the number of frames the ring holds.
-    pub fn capacity(&self) -> usize {
-        self.buf.len()
+    /// The number of ring frames.
+    pub fn len(&self) -> usize {
+        self.len
     }
 
-    /// Returns the absolute index of the next frame to write.
-    pub fn written(&self) -> u64 {
-        self.written
+    /// Returns true if the ring has no frames.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
-    /// Forgets all recorded audio.
-    pub fn clear(&mut self) {
-        self.buf.fill([0.0; 2]);
-        self.written = 0;
+    /// The write position in ring frames.
+    pub fn write_pos(&self) -> usize {
+        self.write
     }
 
-    /// Appends a frame.
-    #[inline]
-    pub fn push(&mut self, frame: Frame) {
-        self.buf[self.written as usize & self.mask] = frame;
-        self.written += 1;
+    /// Zeroes every frame. The write position is kept (0x249d70).
+    pub fn zero(&mut self) {
+        self.data.fill([0.0; 2]);
     }
 
-    /// Returns true if the absolute index `i` holds recorded audio.
-    #[inline]
-    pub fn contains(&self, i: i64) -> bool {
-        i >= 0 && (i as u64) < self.written && self.written - (i as u64) <= self.buf.len() as u64
-    }
-
-    /// Returns the frame at absolute index `i`, or silence if it is not recorded.
-    #[inline]
-    pub fn frame(&self, i: i64) -> Frame {
-        if self.contains(i) {
-            self.buf[i as usize & self.mask]
-        } else {
-            [0.0; 2]
+    /// Appends `src` at the write position, wrapping at the end, then refreshes both mirrors
+    /// (0x24a310).
+    pub fn record(&mut self, src: &[[f32; 2]]) {
+        let mut src = src;
+        let room = self.len - self.write;
+        if room < src.len() {
+            if room > 0 {
+                self.data[GUARD + self.write..GUARD + self.len].copy_from_slice(&src[..room]);
+                src = &src[room..];
+            }
+            self.write = 0;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn push_and_read_back() {
-        let mut ring = Ring::new(16);
-        for i in 0..40 {
-            ring.push([i as f32, -(i as f32)]);
+        if !src.is_empty() {
+            self.data[GUARD + self.write..GUARD + self.write + src.len()].copy_from_slice(src);
+            self.write += src.len();
         }
-        assert_eq!(ring.frame(39), [39.0, -39.0]);
-        assert_eq!(ring.frame(24), [24.0, -24.0]);
-        // Overwritten, future, and negative frames are silent.
-        assert_eq!(ring.frame(23), [0.0, 0.0]);
-        assert_eq!(ring.frame(40), [0.0, 0.0]);
-        assert_eq!(ring.frame(-1), [0.0, 0.0]);
+        let len = self.len;
+        self.data.copy_within(GUARD..2 * GUARD, GUARD + len);
+        self.data.copy_within(len..len + GUARD, 0);
+    }
+
+    /// The frame at ring position `i` plus `j`, for `-GUARD < j <= GUARD` (the original reads
+    /// the guard mirrors directly).
+    #[inline]
+    pub fn frame(&self, i: usize, j: isize) -> [f32; 2] {
+        self.data[(GUARD + i).wrapping_add_signed(j)]
     }
 }

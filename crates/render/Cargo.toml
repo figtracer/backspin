@@ -1,0 +1,10 @@
+[package]
+name = "backspin-render"
+description = "Offline renderer with the flags of the Gross Beat harness, for parity checks."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+backspin-engine.workspace = true

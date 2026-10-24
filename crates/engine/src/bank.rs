@@ -1,228 +1,118 @@
-//! Slot banks: the per-lane envelopes and their settings.
+//! Slots and banks (state.md section 4).
 
-use backspin_envelope::Envelope;
-use serde::{Deserialize, Serialize};
+use backspin_envelope::{Cursor, Envelope};
 
-/// Number of slots per lane.
+/// Slots per bank.
 pub const SLOTS: usize = 36;
 
-/// A grid size used for trigger and position sync.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Sync {
-    /// No sync.
-    #[default]
-    Off,
-    /// 1/4 beat.
-    Quarter,
-    /// 1/2 beat.
-    Half,
-    /// 1 beat.
-    Beat,
-    /// 2 beats.
-    TwoBeats,
-    /// 4 beats.
-    FourBeats,
+/// One slot (`TBRSlot`): a 4-beat envelope plus its switching settings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Slot {
+    /// Name; empty shows as "Slot N".
+    pub name: String,
+    /// Trigger sync index into the sync table (+0xd0), 5 = 4 beats.
+    pub trigger_sync: i32,
+    /// Position sync index (+0xd4).
+    pub position_sync: i32,
+    /// Force hold: 0 off, 1 last, 2 next (+0xd8).
+    pub force_hold: i32,
+    /// "Link volume slot" (+0xdc).
+    pub link: u8,
+    /// "Key-held" (+0xdd).
+    pub key_held: u8,
+    /// "One-shot" (+0xde).
+    pub one_shot: u8,
+    /// The envelope.
+    pub env: Envelope,
+    /// Cached "empty" flag (+0xe4): every point at 1.0.
+    pub empty: bool,
 }
 
-impl Sync {
-    /// All values, in menu order.
-    pub const ALL: [Self; 6] =
-        [Self::Off, Self::Quarter, Self::Half, Self::Beat, Self::TwoBeats, Self::FourBeats];
-
-    /// Grid size in beats, or `None` for [`Sync::Off`].
-    pub fn beats(self) -> Option<f64> {
-        match self {
-            Self::Off => None,
-            Self::Quarter => Some(0.25),
-            Self::Half => Some(0.5),
-            Self::Beat => Some(1.0),
-            Self::TwoBeats => Some(2.0),
-            Self::FourBeats => Some(4.0),
-        }
-    }
-
-    /// Display name.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Off => "Off",
-            Self::Quarter => "1/4 beat",
-            Self::Half => "1/2 beat",
-            Self::Beat => "1 beat",
-            Self::TwoBeats => "2 beats",
-            Self::FourBeats => "4 beats",
-        }
-    }
-}
-
-/// Per-slot hold mode.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ForceHold {
-    /// No hold.
-    #[default]
-    Off,
-    /// Loop the last bar at once.
-    Last,
-    /// Record one more bar, then loop it.
-    Next,
-}
-
-impl ForceHold {
-    /// All values, in menu order.
-    pub const ALL: [Self; 3] = [Self::Off, Self::Last, Self::Next];
-
-    /// Display name.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Off => "Off",
-            Self::Last => "Last",
-            Self::Next => "Next",
-        }
-    }
-}
-
-/// Settings stored with each slot.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SlotSettings {
-    /// When a selected slot starts.
-    pub trigger_sync: Sync,
-    /// Where in the envelope a slot starts.
-    pub position_sync: Sync,
-    /// The slot plays only while its MIDI key is held.
-    pub key_held: bool,
-    /// The slot plays its envelope once, then the lane returns to slot 1.
-    pub one_shot: bool,
-    /// Time lane only: selecting this slot also selects the volume slot with the same number.
-    pub link: bool,
-    /// Hold mode while this slot is active.
-    pub force_hold: ForceHold,
-}
-
-impl Default for SlotSettings {
+impl Default for Slot {
     fn default() -> Self {
         Self {
-            trigger_sync: Sync::Off,
-            position_sync: Sync::FourBeats,
-            key_held: false,
-            one_shot: false,
-            link: false,
-            force_hold: ForceHold::Off,
+            name: String::new(),
+            trigger_sync: 5,
+            position_sync: 5,
+            force_hold: 0,
+            link: 0,
+            key_held: 0,
+            one_shot: 0,
+            env: Envelope::slot(),
+            empty: true,
         }
     }
-}
-
-/// One slot: a named envelope with settings.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Slot {
-    /// Display name.
-    pub name: String,
-    /// The envelope.
-    pub envelope: Envelope,
-    /// Trigger and hold settings.
-    #[serde(default)]
-    pub settings: SlotSettings,
 }
 
 impl Slot {
-    /// Creates a slot with default settings.
-    pub fn new(name: impl Into<String>, envelope: Envelope) -> Self {
-        Self { name: name.into(), envelope, settings: SlotSettings::default() }
-    }
-}
-
-/// Identifies a lane.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum LaneId {
-    /// Playback position.
-    Time,
-    /// Gain.
-    Volume,
-}
-
-impl LaneId {
-    /// All lanes.
-    pub const ALL: [Self; 2] = [Self::Time, Self::Volume];
-
-    /// The first MIDI note that selects slot 1 of this lane.
-    pub fn base_note(self) -> u8 {
-        match self {
-            Self::Time => 60,
-            Self::Volume => 24,
+    /// The name the editor and the host show: the name, or "Slot N".
+    pub fn display_name(&self, index: usize) -> String {
+        if self.name.is_empty() {
+            format!("Slot {}", index + 1)
+        } else {
+            self.name.clone()
         }
     }
 
-    /// Display name.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Time => "Time",
-            Self::Volume => "Volume",
-        }
-    }
-
-    /// The default value of a new envelope in this lane.
-    pub fn default_level(self) -> f64 {
-        1.0
+    /// Recomputes the cached "empty" flag after an edit.
+    pub fn update_empty(&mut self) {
+        self.empty = self.env.is_empty();
     }
 }
 
-/// All slots of all lanes.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A bank of 36 slots (time or volume) and its playback state (`self+0x1a0 + bank * 0x208`).
+#[derive(Clone, Debug)]
 pub struct Bank {
-    /// Time lane slots.
-    pub time: Vec<Slot>,
-    /// Volume lane slots.
-    pub volume: Vec<Slot>,
-}
-
-impl Default for Bank {
-    fn default() -> Self {
-        crate::presets::factory_bank()
-    }
+    /// Active slot (playing in the engine), -1 when stopped (+0x00).
+    pub active: i32,
+    /// Selected slot = parameter 0/1 (+0x04).
+    pub selected: i32,
+    /// Slot shown in the editor (+0x08).
+    pub edited: i32,
+    /// Slot that waits for the trigger time (+0x0c).
+    pub pending: i32,
+    /// Trigger time in ticks, `i32::MAX` = none (+0x10).
+    pub trigger_time: i32,
+    /// MIDI note of slot 0 (+0x14).
+    pub base_note: i32,
+    /// The slots.
+    pub slots: Vec<Slot>,
+    /// Key-held stack of slot indexes (+0x150).
+    pub key_stack: Vec<i32>,
+    /// The slot whose envelope plays (+0x158). It survives a stop.
+    pub active_slot: usize,
+    /// Envelope playback state (+0x160).
+    pub cursor: Cursor,
+    /// Beats per sample (+0x1e0).
+    pub step: f64,
+    /// Attack compensation in samples (+0x1f0).
+    pub attack_comp: f64,
+    /// Envelope position for the editor locator, in beats (+0x188 / +0x198).
+    pub position: f64,
 }
 
 impl Bank {
-    /// Returns the slots of a lane.
-    pub fn lane(&self, lane: LaneId) -> &[Slot] {
-        match lane {
-            LaneId::Time => &self.time,
-            LaneId::Volume => &self.volume,
+    /// A bank with constructor slots.
+    pub fn new(base_note: i32) -> Self {
+        Self {
+            active: -1,
+            selected: 0,
+            edited: 0,
+            pending: 0,
+            trigger_time: i32::MAX,
+            base_note,
+            slots: vec![Slot::default(); SLOTS],
+            key_stack: Vec::with_capacity(SLOTS + 1),
+            active_slot: 0,
+            cursor: Cursor::default(),
+            step: 0.0,
+            attack_comp: 0.0,
+            position: 0.0,
         }
     }
 
-    /// Returns the slots of a lane, mutably.
-    pub fn lane_mut(&mut self, lane: LaneId) -> &mut Vec<Slot> {
-        match lane {
-            LaneId::Time => &mut self.time,
-            LaneId::Volume => &mut self.volume,
-        }
-    }
-
-    /// Returns a slot, clamping the index.
-    pub fn slot(&self, lane: LaneId, index: usize) -> &Slot {
-        let slots = self.lane(lane);
-        &slots[index.min(slots.len() - 1)]
-    }
-
-    /// Makes sure every lane has exactly [`SLOTS`] slots and valid envelopes.
-    pub fn sanitize(&mut self) {
-        for lane in LaneId::ALL {
-            let slots = self.lane_mut(lane);
-            slots.truncate(SLOTS);
-            while slots.len() < SLOTS {
-                let n = slots.len() + 1;
-                slots.push(Slot::new(format!("Slot {n}"), Envelope::flat(lane.default_level())));
-            }
-            for slot in slots.iter_mut() {
-                slot.envelope.normalize();
-            }
-        }
-    }
-
-    /// Swaps two slots of a lane.
-    pub fn swap(&mut self, lane: LaneId, a: usize, b: usize) {
-        let slots = self.lane_mut(lane);
-        if a < slots.len() && b < slots.len() {
-            slots.swap(a, b);
-        }
+    /// The slot whose envelope plays.
+    pub fn active_slot(&self) -> &Slot {
+        &self.slots[self.active_slot]
     }
 }
