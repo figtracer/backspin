@@ -366,6 +366,8 @@ dependencies = [
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "backspin-engine",
+ "backspin-render",
  "nih_plug_xtask",
 ]
 

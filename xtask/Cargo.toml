@@ -7,3 +7,5 @@ publish.workspace = true
 
 [dependencies]
 nih_plug_xtask.workspace = true
+backspin-engine.workspace = true
+backspin-render.workspace = true
