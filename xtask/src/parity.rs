@@ -56,7 +56,7 @@ impl Outcome {
 }
 
 /// Runs the parity matrix. Flags: `--filter TEXT` (only cases whose name contains TEXT),
-/// `--group NAME` (presets, configs, options, sweeps, pos, midi), `--jobs N`, `--keep` (keep the
+/// `--group NAME` (presets, configs, options, sweeps, pos, midi, features), `--jobs N`, `--keep` (keep the
 /// WAV files of passing cases), `--quick` (one input per case).
 pub fn run(args: &[String]) -> Result<(), String> {
     let mut filter = None;
@@ -616,6 +616,7 @@ fn matrix(out_dir: &Path) -> Result<Vec<Case>, String> {
     }
 
     midi_cases(&mut cases, &preset_path);
+    feature_cases(&mut cases, out_dir)?;
     Ok(cases)
 }
 
@@ -692,4 +693,168 @@ fn midi_cases(cases: &mut Vec<Case>, preset_path: &dyn Fn(&str) -> PathBuf) {
             }
         }
     }
+}
+
+/// A slot setting to change in a crafted state.
+#[derive(Clone, Copy)]
+enum Edit {
+    ForceHold(usize, usize, i32),
+    OneShot(usize, usize),
+    Link(usize, usize),
+    KeyHeld(usize, usize),
+    Sync(usize, usize, i32, i32),
+    Click(u8),
+}
+
+/// Writes a v9 state blob of a preset with slot settings changed through the engine.
+fn feature_state(
+    out_dir: &Path,
+    preset: &str,
+    tag: &str,
+    edits: &[Edit],
+) -> Result<PathBuf, String> {
+    let data = std::fs::read(Path::new(PRESET_DIR).join(format!("{preset}.fst")))
+        .map_err(|e| e.to_string())?;
+    let mut e = Engine::new();
+    e.load_state(fst_state(&data).map_err(|e| e.to_string())?);
+    for edit in edits {
+        match *edit {
+            Edit::ForceHold(b, i, v) => e.banks[b].slots[i].force_hold = v,
+            Edit::OneShot(b, i) => e.banks[b].slots[i].one_shot = 1,
+            Edit::Link(b, i) => e.banks[b].slots[i].link = 1,
+            Edit::KeyHeld(b, i) => e.banks[b].slots[i].key_held = 1,
+            Edit::Sync(b, i, t, p) => {
+                e.banks[b].slots[i].trigger_sync = t;
+                e.banks[b].slots[i].position_sync = p;
+            }
+            Edit::Click(c) => e.click = c,
+        }
+    }
+    let path = out_dir.join(format!("feature_{}_{tag}.bin", preset.replace(' ', "_")));
+    std::fs::write(&path, e.save_state()).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// Gate 5 features that no factory preset uses: force hold Last and Next, one-shot, link, and
+/// trigger and position sync combinations, switched by MIDI notes during the render.
+fn feature_cases(cases: &mut Vec<Case>, out_dir: &Path) -> Result<(), String> {
+    use Edit::*;
+    let presets = [
+        ("Repeater", [3, 9, 17]),
+        ("Turntablist", [2, 5, 11]),
+        ("Stutter", [4, 8, 20]),
+    ];
+    for (preset, [a, b, c]) in presets {
+        let (nb, nc) = (60 + b, 60 + c);
+        let mut variants: Vec<(String, Vec<Edit>, Vec<String>, i64)> = Vec::new();
+        for click in [0u8, 1, 2] {
+            variants.push((
+                format!("fh_last_a_click{click}"),
+                vec![ForceHold(0, a, 1), Click(click)],
+                vec![],
+                a as i64,
+            ));
+            variants.push((
+                format!("fh_next_a_click{click}"),
+                vec![ForceHold(0, a, 2), Click(click)],
+                vec![],
+                a as i64,
+            ));
+            variants.push((
+                format!("fh_switch_click{click}"),
+                vec![ForceHold(0, b, 1), Click(click)],
+                vec![format!("1.3b:{nb}:on"), format!("3.1b:{nc}:on")],
+                a as i64,
+            ));
+            variants.push((
+                format!("fh_next_switch_click{click}"),
+                vec![ForceHold(0, b, 2), ForceHold(1, 3, 1), Click(click)],
+                vec![
+                    format!("0.7b:{nb}:on"),
+                    format!("2.2b:27:on"),
+                    format!("5.6b:{nc}:on"),
+                ],
+                a as i64,
+            ));
+        }
+        variants.push(("one_shot_a".into(), vec![OneShot(0, a)], vec![], a as i64));
+        variants.push((
+            "one_shot_vol".into(),
+            vec![OneShot(1, 5)],
+            vec![s("1.2b:29:on")],
+            a as i64,
+        ));
+        variants.push((
+            "one_shot_midi".into(),
+            vec![OneShot(0, b)],
+            vec![format!("1.1b:{nb}:on")],
+            a as i64,
+        ));
+        variants.push((
+            "link_a".into(),
+            vec![Link(0, a), Link(0, b)],
+            vec![
+                format!("2.1b:{nb}:on"),
+                s("2.6b:30:on"),
+                format!("4.9b:{nc}:on"),
+            ],
+            a as i64,
+        ));
+        variants.push((
+            "keyheld_fh".into(),
+            vec![KeyHeld(0, b), ForceHold(0, b, 1), KeyHeld(0, c)],
+            vec![
+                format!("1b:{nb}:on"),
+                format!("2b:{nc}:on"),
+                format!("3b:{nc}:off"),
+                format!("4.4b:{nb}:off"),
+            ],
+            a as i64,
+        ));
+        for (t, p) in [
+            (0, 0),
+            (0, 3),
+            (1, 1),
+            (2, 4),
+            (3, 0),
+            (4, 2),
+            (5, 1),
+            (1, 5),
+        ] {
+            variants.push((
+                format!("sync_t{t}_p{p}"),
+                vec![Sync(0, b, t, p), Sync(1, 7, p, t)],
+                vec![format!("1.37b:{nb}:on"), s("2.71b:31:on")],
+                a as i64,
+            ));
+        }
+        for (tag, edits, notes, start) in variants {
+            let state = feature_state(out_dir, preset, &tag, &edits)?;
+            for (sr, block) in [(48000, 512), (44100, 333)] {
+                for hold in [0, 1] {
+                    let mut f = base(sr, 120.0, block, 5.0, &state);
+                    param(&mut f, 0, start);
+                    param(&mut f, 1, 0);
+                    if hold == 1 {
+                        param(&mut f, 7, 1);
+                    }
+                    for n in &notes {
+                        f.extend([s("--note"), n.clone()]);
+                    }
+                    for input in ["ramp", "noise"] {
+                        cases.push(Case {
+                            group: "features",
+                            name: format!(
+                                "{preset} {tag} hold={hold} sr={sr} blk={block} in={input}"
+                            ),
+                            flags: f.clone(),
+                            input: s(input),
+                            sr,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }

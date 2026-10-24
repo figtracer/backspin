@@ -322,3 +322,139 @@ impl Engine {
         b.position = b.cursor.position(&b.slots[b.active_slot].env);
     }
 }
+
+/// The code-only paths of decision 12 in SPEC.md, which the harness cannot drive: the
+/// stopped-transport fade, the scratch inertia and the tempo-change crossfade.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{REC_UPDATE_VALUE, Slot};
+    use backspin_dsp::{LN_001, OnePole};
+    use backspin_envelope::{Envelope, Point, Shape};
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.set_sample_rate(48000);
+        e.set_block_size(256);
+        e.set_time_sig(96);
+        e.set_tempo(120.0);
+        e
+    }
+
+    fn ramp(start: usize, n: usize) -> Vec<[f32; 2]> {
+        (start..start + n)
+            .map(|i| [i as f32 * 1e-4, -(i as f32) * 2e-4])
+            .collect()
+    }
+
+    /// A time slot whose read position moves: 1.0 -> 0.5 linear over 4 beats.
+    fn moving_slot() -> Slot {
+        let mut s = Slot {
+            env: Envelope::with_points(
+                4.0,
+                vec![
+                    Point::new(0.0, 1.0, 0.0, Shape::HOLD),
+                    Point::new(4.0, 0.5, 0.0, Shape::SINGLE_CURVE),
+                ],
+            ),
+            ..Slot::default()
+        };
+        s.update_empty();
+        s
+    }
+
+    #[test]
+    fn stopped_transport_fades_from_the_last_output() {
+        let mut e = engine();
+        e.set_playing(true);
+        let mut buf = ramp(0, 256);
+        e.render(&mut buf);
+        let last = e.last_out;
+        assert_ne!(last, [0.0; 2]);
+        e.set_playing(false);
+        let input = ramp(1000, 100);
+        let mut buf = input.clone();
+        e.render(&mut buf);
+        for (i, (o, x)) in buf.iter().zip(&input).enumerate() {
+            let w = (((i as f64 * std::f64::consts::PI) / 99.0).cos() + 1.0) * 0.5;
+            let w = w as f32;
+            for ch in 0..2 {
+                assert_eq!(
+                    o[ch].to_bits(),
+                    (x[ch] * (1.0 - w) + last[ch] * w).to_bits(),
+                    "sample {i}"
+                );
+            }
+        }
+        // The fade runs once; the next block passes the input through.
+        let mut buf = input.clone();
+        e.render(&mut buf);
+        assert_eq!(buf, input);
+    }
+
+    #[test]
+    fn scratch_follows_the_target_with_three_smoothers() {
+        let mut e = engine();
+        e.set_playing(true);
+        let mut buf = ramp(0, 256);
+        e.render(&mut buf);
+        e.process_param(8, 30000, REC_UPDATE_VALUE);
+        let target = e.scratch;
+        assert_eq!(target, 30000.0f32 * (1.0 / 65536.0) - 1.0);
+        // Reference: three one-poles at 0.3 s rise and 0.2 s fall to 1 %, divided by sqrt(3).
+        let c = |t: f64| (LN_001 / (48000.0 * t * 0.5773502691896258)).exp();
+        let mut stages = [OnePole {
+            rise: c(0.3),
+            fall: c(0.2),
+            state: 0.0,
+        }; 3];
+        for _ in 0..40 {
+            let mut x = vec![target; 256];
+            for s in &mut stages {
+                s.process(&mut x);
+            }
+            let mut buf = ramp(0, 256);
+            e.render(&mut buf);
+            for (s, r) in e.scratch_sm.iter().zip(&stages) {
+                assert_eq!(s.state.to_bits(), r.state.to_bits());
+            }
+        }
+        // Falling targets use the release coefficient.
+        assert!(stages[2].state < 0.0 && stages[2].state > target as f64);
+    }
+
+    #[test]
+    fn tempo_change_crossfades_one_block() {
+        let mut e = engine();
+        e.banks[0].slots[0] = moving_slot();
+        e.click = 0;
+        e.update_click();
+        e.set_playing(true);
+        for k in 0..20 {
+            let mut buf = ramp(k * 256, 256);
+            e.render(&mut buf);
+        }
+        // A small change does not crossfade, a large one does.
+        e.set_tempo(120.001);
+        assert_eq!(e.xfade_pending, 0);
+        e.set_tempo(100.0);
+        assert_eq!(e.xfade_pending, e.xfade_len);
+        assert_eq!(e.xfade_len, 48);
+        let mut fresh = e.clone();
+        fresh.xfade_pending = 0;
+        let input = ramp(20 * 256, 256);
+        let (mut a, mut b) = (input.clone(), input.clone());
+        e.render(&mut a);
+        fresh.render(&mut b);
+        assert_eq!(e.xfade_pending, 0);
+        // From sample 48 on, the weight of the new head is 1.
+        assert_eq!(a[48..], b[48..]);
+        assert_ne!(a[..48], b[..48]);
+        // The crossfade lasts one block: the next blocks match.
+        let input = ramp(21 * 256, 256);
+        let (mut a, mut b) = (input.clone(), input.clone());
+        e.render(&mut a);
+        fresh.render(&mut b);
+        assert_eq!(a, b);
+    }
+}
