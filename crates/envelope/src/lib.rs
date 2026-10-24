@@ -11,6 +11,7 @@
 mod record;
 mod render;
 mod shape;
+pub mod tools;
 
 pub use record::{Error, RECORD_VERSION, Reader, read_fnv, write_fnv};
 pub use render::Cursor;
@@ -85,6 +86,8 @@ pub struct Envelope {
     pub marker: i32,
     /// Length in envelope units (+0x68). 4 beats for slots, 1 for filter kernels.
     pub length: f64,
+    /// The point clipboard of this envelope (+0x30; Cut/Copy/Paste, not saved).
+    pub clip: Vec<Point>,
 }
 
 impl Envelope {
@@ -106,6 +109,7 @@ impl Envelope {
             flags: 0,
             marker: -1,
             length,
+            clip: Vec::new(),
         };
         env.prepare();
         env
