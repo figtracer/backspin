@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = ["crates/envelope", "crates/dsp", "crates/engine"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace.dependencies]
+backspin-dsp = { path = "crates/dsp" }
+backspin-engine = { path = "crates/engine" }
+backspin-envelope = { path = "crates/envelope" }
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }
+nih_plug_xtask = { git = "https://github.com/robbert-vdh/nih-plug", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"

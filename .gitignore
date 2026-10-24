@@ -1,0 +1,4 @@
+target/
+*.vst3
+*.clap
+.DS_Store
