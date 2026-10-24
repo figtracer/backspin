@@ -1,0 +1,20 @@
+[package]
+name = "backspin"
+description = "Time and volume mapping effect with 36+36 envelope slots."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+backspin-engine.workspace = true
+nih_plug.workspace = true
+nih_plug_egui.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rfd = "0.15"
+hound = "3.5"
