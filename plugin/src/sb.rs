@@ -116,6 +116,32 @@ impl Shared {
         self.push();
     }
 
+    /// Sets the master mix; `push` rebuilds the processors (at the end of a knob drag).
+    pub fn set_mix(&self, v: f32, push: bool) {
+        {
+            let mut m = self.model.lock();
+            let Some(t) = m.tree.as_mut() else { return };
+            let is = |c: &Tree| matches!(c.prop("id"), Some(Var::String(x)) if x == "masterMix");
+            match t.children.iter_mut().find(|c| is(c)) {
+                Some(leaf) => match leaf.props.iter_mut().find(|(k, _)| k == "value") {
+                    Some((_, old)) => *old = Var::Double(v as f64),
+                    None => leaf.props.push(("value".into(), Var::Double(v as f64))),
+                },
+                None => t.children.push(Tree {
+                    kind: "float".into(),
+                    props: vec![
+                        ("id".into(), Var::String("masterMix".into())),
+                        ("value".into(), Var::Double(v as f64)),
+                    ],
+                    children: Vec::new(),
+                }),
+            }
+        }
+        if push {
+            self.push();
+        }
+    }
+
     /// Turns shaper `k` on or off (on also makes it visible: the plugin processes visible shapers
     /// only).
     pub fn set_shaper(&self, k: usize, on: bool) {

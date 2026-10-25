@@ -99,6 +99,8 @@ pub struct Gui {
     pub sb_band: usize,
     /// The last Gross Beat preset loaded from the header.
     pub gb_preset: String,
+    /// The shape mix knob drag: the start value and the pointer travel.
+    pub sb_mix_drag: Option<(f32, f32)>,
     /// The texture of the code-exact frame.
     frame_tex: Option<egui::TextureHandle>,
 }
@@ -142,6 +144,7 @@ impl Gui {
             sb_selected: 5,
             sb_band: 1,
             gb_preset: "(current)".into(),
+            sb_mix_drag: None,
             frame_tex: None,
         }
     }
@@ -1074,5 +1077,58 @@ mod snapshots {
         render("stutter_compact", gui_with(Some("Stutter")), |g| {
             g.compact = true
         });
+    }
+
+    /// Runs frames with `events` (one list per frame) and returns the Gross Beat preset after.
+    fn click_frames(gui: &mut Gui, frames: Vec<Vec<egui::Event>>) {
+        let host = NoHost;
+        let setter = ParamSetter::new(&host);
+        let ctx = Context::default();
+        let (w, h) = (EDITOR_SIZE.0 as f32, EDITOR_SIZE.1 as f32);
+        for events in frames {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(w, h))),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| gui.frame(ctx, &setter));
+        }
+    }
+
+    fn click(at: Pos2) -> Vec<Vec<egui::Event>> {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        vec![
+            vec![egui::Event::PointerMoved(at)],
+            vec![button(true)],
+            vec![button(false)],
+            vec![],
+        ]
+    }
+
+    /// One click on the next arrow steps one Gross Beat preset.
+    #[test]
+    fn preset_arrow_steps_once() {
+        let list = super::menus::state_presets();
+        if list.len() < 3 {
+            return;
+        }
+        let names: Vec<String> = list
+            .iter()
+            .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+            .collect();
+        let mut gui = gui_with(None);
+        gui.gb_preset = names[0].clone();
+        let r = backspin_ui::sb::layout::GB_NEXT;
+        let at = pos2(
+            (r.x0 + r.x1) as f32 * 0.5,
+            ((r.y0 + r.y1) / 2 + backspin_ui::HEIGHT) as f32,
+        );
+        click_frames(&mut gui, click(at));
+        assert_eq!(gui.gb_preset, names[1]);
     }
 }

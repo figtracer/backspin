@@ -1,17 +1,20 @@
-//! The ShaperBox section under the Gross Beat form: the preset header (Gross Beat and ShaperBox
-//! presets), the shaper rack, the band tabs and the wave view. The painters are
+//! The shape section under the Gross Beat form (the per-band shapers): the preset header (Gross
+//! Beat and shape presets), the mix knob, the shaper rack, the band tabs and the wave view. The painters are
 //! `backspin_ui::sb`; this module builds their model and handles input on the same rects.
 
 use super::Gui;
 use super::menus::{load_preset, state_presets};
+use super::paint::knob;
 use backspin_gfx::Rect as DRect;
 use backspin_shaperbox::state::State;
 use backspin_shaperbox::wave::{LENGTHS, Point, rate_hz, render_table};
+use backspin_ui::sb::ACCENT;
 use backspin_ui::sb::layout;
 use backspin_ui::{HEIGHT, SbModel, ShaperCell};
 use nih_plug::prelude::ParamSetter;
 use nih_plug_egui::egui::{
-    self, Id, PopupCloseBehavior, Rect, Response, ScrollArea, Sense, Ui, pos2,
+    self, AboveOrBelow, Id, PointerButton, PopupCloseBehavior, Rect, Response, ScrollArea, Sense,
+    Ui, pos2,
 };
 use std::path::{Path, PathBuf};
 
@@ -127,7 +130,7 @@ pub fn model(gui: &Gui) -> SbModel {
         info = format!("{info} \u{b7} {} \u{b7} {timing}", sec.id);
     }
     if !PORTED.contains(&k) {
-        info.push_str(" \u{b7} not ported yet (passes audio through)");
+        info.push_str(" \u{b7} not available yet");
     }
     out.info = info;
     out
@@ -145,7 +148,9 @@ fn list_popup(
         ui.memory_mut(|m| m.toggle_popup(id));
     }
     let mut picked = None;
-    egui::popup_below_widget(ui, id, r, PopupCloseBehavior::CloseOnClickOutside, |ui| {
+    // Upward: the section is at the bottom of the window.
+    let close = PopupCloseBehavior::CloseOnClickOutside;
+    egui::popup_above_or_below_widget(ui, id, r, AboveOrBelow::Above, close, |ui| {
         ui.set_min_width(r.rect.width().max(200.0));
         ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
             for (i, it) in items.iter().enumerate() {
@@ -226,7 +231,7 @@ fn sb_presets(gui: &mut Gui, ui: &mut Ui) {
         .collect();
     let r = ui.interact(at(layout::PACK), Id::new("sb_pack"), Sense::click());
     if r.hovered() {
-        gui.hint = "ShaperBox preset pack".into();
+        gui.hint = "Shape preset pack".into();
     }
     if let Some(i) = list_popup(ui, &r, Id::new("sb_pack_popup"), &packs, Some(gui.sb_pack)) {
         gui.sb_pack = i;
@@ -238,7 +243,7 @@ fn sb_presets(gui: &mut Gui, ui: &mut Ui) {
         .position(|p| Some(&p.path) == gui.sb_preset.as_ref());
     let r = ui.interact(at(layout::PRESET), Id::new("sb_preset"), Sense::click());
     if r.hovered() {
-        gui.hint = "ShaperBox preset (from the local ShaperBox 3 library)".into();
+        gui.hint = "Shape preset".into();
     }
     let mut pick = list_popup(ui, &r, Id::new("sb_preset_popup"), &names, current);
     for (rect, step, id) in [(layout::PREV, -1, "sb_prev"), (layout::NEXT, 1, "sb_next")] {
@@ -262,7 +267,7 @@ fn sb_presets(gui: &mut Gui, ui: &mut Ui) {
     }
     let r = ui.interact(at(layout::POWER), Id::new("sb_power"), Sense::click());
     if r.hovered() {
-        gui.hint = "ShaperBox section on/off".into();
+        gui.hint = "Shapes on/off".into();
     }
     if r.clicked() {
         let (enabled, has_tree) = {
@@ -286,6 +291,50 @@ fn load_init(gui: &mut Gui, lib: &[crate::sb::Pack]) {
     if let Some(p) = init {
         load_sb(gui, &p);
     }
+}
+
+/// The mix knob (the state's master mix): drag, Ctrl for finer steps, double-click for 100 %.
+/// The processors are rebuilt when the drag ends.
+fn mix_knob(gui: &mut Gui, ui: &mut Ui) {
+    let r = at(layout::KNOB);
+    let resp = ui.interact(r, Id::new("sb_mix"), Sense::click_and_drag());
+    let mix = {
+        let m = gui.shared.sb.model.lock();
+        m.tree
+            .as_ref()
+            .map_or(1.0, |t| State::from_tree(t).master_mix)
+    };
+    if resp.drag_started_by(PointerButton::Primary) {
+        gui.sb_mix_drag = Some((mix, 0.0));
+    }
+    if let Some((start, travel)) = gui.sb_mix_drag
+        && resp.dragged_by(PointerButton::Primary)
+    {
+        let fine = ui.input(|i| i.modifiers.command);
+        let travel = travel - resp.drag_delta().y / if fine { 16.0 } else { 1.0 };
+        gui.sb_mix_drag = Some((start, travel));
+        gui.shared
+            .sb
+            .set_mix((start + travel / 200.0).clamp(0.0, 1.0), false);
+    }
+    if resp.drag_stopped_by(PointerButton::Primary) && gui.sb_mix_drag.take().is_some() {
+        gui.shared.sb.set_mix(mix, true);
+    }
+    if resp.double_clicked() {
+        gui.shared.sb.set_mix(1.0, true);
+    }
+    if resp.hovered() {
+        gui.hint = format!("Shape mix: {:.0}%", mix * 100.0);
+    }
+    knob(
+        ui.painter(),
+        r,
+        mix,
+        colour(ACCENT),
+        false,
+        true,
+        gui.sb_mix_drag.is_some(),
+    );
 }
 
 /// The rack, the band tabs and the shaper's on toggle.
@@ -376,4 +425,9 @@ pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
     gb_presets(gui, ui, setter);
     sb_presets(gui, ui);
     rack(gui, ui);
+    mix_knob(gui, ui);
+}
+
+fn colour(c: u32) -> egui::Color32 {
+    egui::Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }

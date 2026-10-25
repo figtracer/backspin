@@ -70,9 +70,9 @@ pub fn options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Respon
                 }
                 ui.close_menu();
             }
-            if ui.button("Open ShaperBox preset file...").clicked() {
+            if ui.button("Open shape preset file...").clicked() {
                 if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("ShaperBox preset", &["dat"])
+                    .add_filter("Shape preset", &["dat"])
                     .pick_file()
                 {
                     let _ = gui.shared.sb.load_file(&p);

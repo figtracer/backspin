@@ -1,16 +1,16 @@
-//! The ShaperBox section under the Gross Beat form (a Backspin addition). It reuses the form's
-//! painters and palette: the gradient header of the bottom panel with a pill, the combos, the
-//! slot-grid cells for the shaper rack, the side tabs for the bands and an envelope-style view of
-//! the selected LFO wave.
+//! The shape section under the form (a Backspin addition, the per-band shapers). It follows the
+//! form's columns and painters: the top panel's gradient with a knob and a pill, the slot-grid
+//! cells in the left bevel column, the side tabs in the side column and an envelope-style view
+//! of the selected LFO wave under the envelope.
 
 use crate::painters::{TOGGLE, combo_at, control, h_button, rect, side_tab, v_button};
-use crate::{Font, Text};
+use crate::{Font, PANEL, Text};
 use backspin_gfx::dib::lighten;
 use backspin_gfx::{Dib, DrawPath, PI, Rect, gradient_lut};
 
 /// The section height under the form.
 pub const SB_HEIGHT: i32 = 200;
-/// The section accent (the third group colour) and its fill variant.
+/// The section's group colour (beside time's green and volume's orange) and its fill variant.
 pub const ACCENT: u32 = 0x7fd6ff;
 pub const ACCENT_FILL: u32 = 0x6cc4ef;
 
@@ -20,25 +20,28 @@ pub const GLYPH_PREV: &str = "\u{e001}";
 pub const GLYPH_NEXT: &str = "\u{e002}";
 pub const GLYPH_POWER: &str = "\u{e003}";
 
-/// Control rects in section coordinates (the plugin hit-tests the same rects).
+/// Control rects in section coordinates (the plugin hit-tests the same rects). The columns are
+/// the form's: the slot grids' x range, the side column at 270 and the envelope at 298.
 pub mod layout {
     use super::rect;
     use backspin_gfx::Rect;
 
-    pub const HEADER: Rect = rect(0, 0, 830, 40);
-    pub const PILL: Rect = rect(10, 6, 124, 28);
-    pub const GB_PRESET: Rect = rect(140, 11, 170, 19);
-    pub const GB_PREV: Rect = rect(314, 9, 22, 24);
-    pub const GB_NEXT: Rect = rect(337, 9, 22, 24);
-    pub const PACK: Rect = rect(372, 11, 170, 19);
-    pub const PRESET: Rect = rect(546, 11, 196, 19);
-    pub const PREV: Rect = rect(746, 9, 22, 24);
-    pub const NEXT: Rect = rect(769, 9, 22, 24);
-    pub const POWER: Rect = rect(800, 9, 22, 24);
-    pub const RACK: Rect = rect(10, 50, 400, 144);
-    pub const BANDS: Rect = rect(418, 50, 23, 81);
-    pub const SHAPER_ON: Rect = rect(418, 140, 23, 27);
-    pub const WAVE: Rect = rect(448, 50, 376, 144);
+    /// The mix knob, where the form's mix knobs sit in their panels.
+    pub const KNOB: Rect = rect(7, 5, 48, 48);
+    pub const PILL: Rect = rect(36, 14, 97, 31);
+    pub const GB_PRESET: Rect = rect(150, 21, 170, 19);
+    pub const GB_PREV: Rect = rect(324, 19, 22, 24);
+    pub const GB_NEXT: Rect = rect(347, 19, 22, 24);
+    pub const PACK: Rect = rect(382, 21, 170, 19);
+    pub const PRESET: Rect = rect(556, 21, 190, 19);
+    pub const PREV: Rect = rect(750, 19, 22, 24);
+    pub const NEXT: Rect = rect(773, 19, 22, 24);
+    pub const POWER: Rect = rect(800, 19, 22, 24);
+    pub const BEVEL: Rect = rect(0, 61, 266, 139);
+    pub const RACK: Rect = rect(10, 70, 248, 124);
+    pub const BANDS: Rect = rect(270, 66, 23, 81);
+    pub const SHAPER_ON: Rect = rect(270, 160, 23, 27);
+    pub const WAVE: Rect = rect(298, 62, 526, 134);
     /// Rack cells: 4 columns, 4 rows.
     pub const COLS: i32 = 4;
     pub const ROWS: i32 = 4;
@@ -79,64 +82,40 @@ fn agg_colour(c: u32, a: u32) -> u32 {
     a << 24 | (c & 0xff) << 16 | (c & 0xff00) | (c >> 16 & 0xff)
 }
 
-/// The header: the bottom panel's gradient, the pill and the preset combos.
+/// The header: TopBgPaintBoxPaint's panel (without the clock notch) across the width, its pill
+/// and the preset combos.
 fn header(dib: &mut Dib, m: &SbModel, text: &mut dyn Text) {
-    let w = layout::HEADER.x1;
-    let h = layout::HEADER.y1;
+    let w = dib.width() as f64;
     let a = dib.agg();
     a.reset_path();
     a.line_width(1.0);
     a.line_color(0xff323a40);
     a.fill_color(0xff746e66);
     a.move_to(0.0, 0.0);
-    a.line_to((w + 1) as f64, 0.0);
-    a.line_to((w + 1) as f64, h as f64);
-    a.line_to(0.0, h as f64);
-    a.close_polygon();
-    a.linear_gradient((w / 2) as f64, 0.0, (w / 2) as f64, h as f64, 1);
+    a.line_to(0.0, 61.0);
+    a.line_to(39.0, 61.0);
+    a.line_to(60.0, 53.0);
+    a.line_to(w + 1.0, 53.0);
+    a.line_to(w + 1.0, 0.0);
+    a.line_to(0.0, 0.0);
+    a.linear_gradient(w / 2.0, 0.0, w / 2.0, 90.0, 1);
     gradient_lut(a, 72.0, -48.0, 0xff746e66, 1);
     a.draw_path(DrawPath::FillAndStroke);
-    let p = layout::PILL;
-    let (x0, y0, x1, y1) = (p.x0 as f64, p.y0 as f64, p.x1 as f64, p.y1 as f64);
-    let r = (y1 - y0) * 0.5;
     a.reset_path();
     a.fill_color(0xff3a352c);
-    a.move_to(x0, y0);
-    a.line_to(x1 - r, y0);
-    a.arc_to(r, r, PI, false, true, x1 - r, y1);
-    a.line_to(x0, y1);
-    a.close_polygon();
+    a.move_to(36.0, 14.0);
+    a.line_to(118.0, 14.0);
+    a.arc_to(14.0, 14.0, PI, false, true, 118.0, 45.0);
+    a.line_to(36.0, 45.0);
+    a.line_to(36.0, 15.0);
     a.draw_path(DrawPath::Fill);
-    let caption = Rect::new(p.x0, p.y0, p.x1 - 14, p.y1);
+    let r = Rect::new(36, 14, 124, 44);
     let colour = if m.enabled { ACCENT } else { 0x8595a0 };
-    text.draw(
-        dib,
-        Font::Caption,
-        "shaperbox",
-        caption,
-        0x1a,
-        colour,
-        0x100,
-    );
-    text.draw(
-        dib,
-        Font::IlGlyphs,
-        GLYPH_WAVE,
-        Rect::new(p.x0, p.y0, p.x1 - 4, p.y1),
-        0x19,
-        colour,
-        0x100,
-    );
+    text.draw(dib, Font::Caption, "shape", r, 0x1a, colour, 0x100);
+    text.draw(dib, Font::IlGlyphs, GLYPH_WAVE, r, 0x19, colour, 0x100);
+    let value = |w: i32, h: i32, x: i32| Rect::new(x, 1, w - 18, h);
     control(dib, layout::GB_PRESET, |d, w, h| {
-        combo_at(
-            d,
-            w,
-            h,
-            "PRESET:",
-            &m.gb_preset,
-            Rect::new(48, 1, w - 18, h),
-            text,
-        )
+        combo_at(d, w, h, "PRESET:", &m.gb_preset, value(w, h, 48), text)
     });
     control(dib, layout::GB_PREV, |d, w, h| {
         h_button(d, w, h, GLYPH_PREV, false, text)
@@ -145,18 +124,10 @@ fn header(dib: &mut Dib, m: &SbModel, text: &mut dyn Text) {
         h_button(d, w, h, GLYPH_NEXT, false, text)
     });
     control(dib, layout::PACK, |d, w, h| {
-        combo_at(d, w, h, "PACK:", &m.pack, Rect::new(38, 1, w - 18, h), text)
+        combo_at(d, w, h, "PACK:", &m.pack, value(w, h, 38), text)
     });
     control(dib, layout::PRESET, |d, w, h| {
-        combo_at(
-            d,
-            w,
-            h,
-            "SHAPER:",
-            &m.preset,
-            Rect::new(50, 1, w - 18, h),
-            text,
-        )
+        combo_at(d, w, h, "SHAPE:", &m.preset, value(w, h, 46), text)
     });
     control(dib, layout::PREV, |d, w, h| {
         h_button(d, w, h, GLYPH_PREV, false, text)
@@ -169,7 +140,7 @@ fn header(dib: &mut Dib, m: &SbModel, text: &mut dyn Text) {
     });
 }
 
-/// The rack: the slot grid's cells (TimeSlotSelPaint) with the section accent.
+/// The rack: the slot grid's cells (TimeSlotSelPaint) in the section colour.
 fn rack(dib: &mut Dib, w: i32, h: i32, m: &SbModel, text: &mut dyn Text) {
     let (cw, ch) = (w / layout::COLS, h / layout::ROWS);
     for (i, s) in m.shapers.iter().enumerate() {
@@ -199,7 +170,7 @@ fn rack(dib: &mut Dib, w: i32, h: i32, m: &SbModel, text: &mut dyn Text) {
     }
 }
 
-/// The band tabs (SnapSel cells) and the shaper's on toggle.
+/// The band tabs (SnapSel cells).
 fn bands(dib: &mut Dib, w: i32, m: &SbModel, text: &mut dyn Text) {
     const NAMES: [&str; 3] = ["L", "M", "H"];
     let order = (0..3).filter(|&b| b != m.band).chain([m.band]);
@@ -226,19 +197,15 @@ fn bands(dib: &mut Dib, w: i32, m: &SbModel, text: &mut dyn Text) {
 
 /// The envelope-style view of the selected LFO wave.
 fn wave(dib: &mut Dib, w: i32, h: i32, m: &SbModel, text: &mut dyn Text) {
-    dib.fill_rect(Rect::new(0, 0, w, h), 0xff2c3e4b, 0x100);
+    dib.fill_rect(Rect::new(0, 0, w, h), PANEL, 0x100);
     for k in 1..16 {
         let x = k * (w - 1) / 16;
-        let (c, a) = if k % 4 == 0 {
-            (0x4a6273, 0x100)
-        } else {
-            (0x3a5060, 0x100)
-        };
-        dib.fill_rect(Rect::new(x, 0, x + 1, h), c, a);
+        let c = if k % 4 == 0 { 0x26363f } else { 0x2d414f };
+        dib.fill_rect(Rect::new(x, 0, x + 1, h), c, 0x100);
     }
     for k in 1..4 {
         let y = k * (h - 1) / 4;
-        dib.fill_rect(Rect::new(0, y, w, y + 1), 0x3a5060, 0x100);
+        dib.fill_rect(Rect::new(0, y, w, y + 1), 0x2d414f, 0x100);
     }
     let (fw, fh) = ((w - 1) as f64, (h - 1) as f64);
     let ys = |v: f32| fh * (1.0 - (v as f64 + 1.0) * 0.5);
@@ -285,7 +252,8 @@ fn wave(dib: &mut Dib, w: i32, h: i32, m: &SbModel, text: &mut dyn Text) {
 /// Paints the section; `dib`'s origin is the section's top-left corner.
 pub fn paint_sb(dib: &mut Dib, m: &SbModel, text: &mut dyn Text) {
     let w = dib.width();
-    dib.fill_rect(Rect::new(0, 0, w, crate::sb::SB_HEIGHT), 0xff171f24, 0x100);
+    dib.fill_rect(Rect::new(0, 0, w, SB_HEIGHT), PANEL, 0x100);
+    dib.fill_rect(layout::BEVEL, 0xff171f24, 0x100);
     header(dib, m, text);
     control(dib, layout::RACK, |d, w, h| rack(d, w, h, m, text));
     control(dib, layout::BANDS, |d, w, _| bands(d, w, m, text));
