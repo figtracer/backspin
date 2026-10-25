@@ -9,12 +9,15 @@ use super::Gui;
 use super::menus::GB_DIR;
 use super::paint::*;
 use backspin_engine::envelope::tools::{
-    FilterSettings, ScaleSettings, SEQ_FIELDS, SeqSettings, SeqStep, SmoothSettings, ToolError, default_steps, parse_value,
-    value_text,
+    FilterSettings, SEQ_FIELDS, ScaleSettings, SeqSettings, SeqStep, SmoothSettings, ToolError,
+    default_steps, parse_value, value_text,
 };
 use backspin_engine::envelope::{Envelope, Point};
 use nih_plug::prelude::ParamSetter;
-use nih_plug_egui::egui::{self, Color32, ColorImage, Context, Id, PointerButton, Rect, Sense, Slider, TextureHandle, Ui, pos2, vec2};
+use nih_plug_egui::egui::{
+    self, Color32, ColorImage, Context, Id, PointerButton, Rect, Sense, Slider, TextureHandle, Ui,
+    pos2, vec2,
+};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,7 +67,10 @@ impl Default for Dialogs {
             about_image: None,
             scale: ScaleSettings::default(),
             decimate: 500,
-            smooth: SmoothSettings { link: true, ..SmoothSettings::default() },
+            smooth: SmoothSettings {
+                link: true,
+                ..SmoothSettings::default()
+            },
             filter: FilterSettings::default(),
             kernel: default_kernel(),
             steps: default_steps(),
@@ -77,8 +83,17 @@ impl Default for Dialogs {
 
 /// The Filter kernel: `Env filter - default.fnv` from the Maps folder, or its points.
 fn default_kernel() -> Envelope {
-    let mut k = Envelope::with_points(1.0, vec![Point::new(0.0, 0.0, 0.0, 0), Point::new(0.5, 1.0, 0.0, 0), Point::new(0.5, 0.0, 0.0, 0)]);
-    if let Ok(data) = std::fs::read(PathBuf::from(GB_DIR).join("Data/Maps/Env filter - default.fnv")) {
+    let mut k = Envelope::with_points(
+        1.0,
+        vec![
+            Point::new(0.0, 0.0, 0.0, 0),
+            Point::new(0.5, 1.0, 0.0, 0),
+            Point::new(0.5, 0.0, 0.0, 0),
+        ],
+    );
+    if let Ok(data) =
+        std::fs::read(PathBuf::from(GB_DIR).join("Data/Maps/Env filter - default.fnv"))
+    {
         k.load_any(&data);
     }
     k
@@ -87,7 +102,9 @@ fn default_kernel() -> Envelope {
 pub fn not_continuous(tool: &str) -> ToolError {
     ToolError {
         title: "Can't decimate",
-        message: format!("The selection must have at least two points and be continuous for the {tool} tool to work."),
+        message: format!(
+            "The selection must have at least two points and be continuous for the {tool} tool to work."
+        ),
     }
 }
 
@@ -101,7 +118,12 @@ impl Dialogs {
     }
 
     pub fn open_tool(&mut self, kind: ToolKind, bank: usize, index: usize, env: &Envelope) {
-        self.tool = Some(ToolDialog { kind, bank, index, saved: env.clone() });
+        self.tool = Some(ToolDialog {
+            kind,
+            bank,
+            index,
+            saved: env.clone(),
+        });
     }
 
     /// A random number in `0..n` for the Create sequence randomizers (the original uses FPC
@@ -118,12 +140,16 @@ impl Dialogs {
 pub fn show(gui: &mut Gui, ctx: &Context, setter: &ParamSetter) {
     if let Some(e) = gui.dialogs.message.clone() {
         let mut open = true;
-        egui::Window::new(e.title).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
-            ui.label(&e.message);
-            if ui.button("OK").clicked() {
-                open = false;
-            }
-        });
+        egui::Window::new(e.title)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(&e.message);
+                if ui.button("OK").clicked() {
+                    open = false;
+                }
+            });
         if !open {
             gui.dialogs.message = None;
         }
@@ -137,20 +163,25 @@ pub fn show(gui: &mut Gui, ctx: &Context, setter: &ParamSetter) {
 
 /// The rename prompt (FUN_000642d0): caption "Slot N name".
 fn rename_prompt(gui: &mut Gui, ctx: &Context) {
-    let Some((bank, index, mut text)) = gui.dialogs.rename.take() else { return };
+    let Some((bank, index, mut text)) = gui.dialogs.rename.take() else {
+        return;
+    };
     let mut keep = true;
     let mut ok = false;
-    egui::Window::new(format!("Slot {} name", index + 1)).collapsible(false).resizable(false).show(ctx, |ui| {
-        ui.text_edit_singleline(&mut text).request_focus();
-        ui.horizontal(|ui| {
-            if ui.button("OK").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                ok = true;
-            }
-            if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                keep = false;
-            }
+    egui::Window::new(format!("Slot {} name", index + 1))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.text_edit_singleline(&mut text).request_focus();
+            ui.horizontal(|ui| {
+                if ui.button("OK").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    ok = true;
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    keep = false;
+                }
+            });
         });
-    });
     if ok {
         gui.edit_slot(bank, index, false, |s| s.name = text);
     } else if keep {
@@ -160,20 +191,25 @@ fn rename_prompt(gui: &mut Gui, ctx: &Context) {
 
 /// Type in value (0xb7240): "Value for automation point".
 fn value_prompt(gui: &mut Gui, ctx: &Context) {
-    let Some((bank, index, point, mut text)) = gui.dialogs.value.take() else { return };
+    let Some((bank, index, point, mut text)) = gui.dialogs.value.take() else {
+        return;
+    };
     let mut keep = true;
     let mut ok = false;
-    egui::Window::new("Value for automation point").collapsible(false).resizable(false).show(ctx, |ui| {
-        ui.text_edit_singleline(&mut text).request_focus();
-        ui.horizontal(|ui| {
-            if ui.button("OK").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                ok = true;
-            }
-            if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                keep = false;
-            }
+    egui::Window::new("Value for automation point")
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.text_edit_singleline(&mut text).request_focus();
+            ui.horizontal(|ui| {
+                if ui.button("OK").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    ok = true;
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    keep = false;
+                }
+            });
         });
-    });
     if ok {
         let env = gui.shared.model.lock().banks[bank].slots[index].env.clone();
         let old = env.points.get(point).map_or(0.0, |p| p.value as f64);
@@ -197,7 +233,9 @@ fn slider(ui: &mut Ui, label: &str, v: &mut i32, lo: i32, hi: i32) -> bool {
 
 /// The tool dialogs: Level scaling, Decimate, Filter, Smooth up, Create sequence.
 fn tool_dialog(gui: &mut Gui, ctx: &Context) {
-    let Some(t) = gui.dialogs.tool.take() else { return };
+    let Some(t) = gui.dialogs.tool.take() else {
+        return;
+    };
     let title = match t.kind {
         ToolKind::Scale => "Level scaling",
         ToolKind::Decimate => "Decimate",
@@ -211,81 +249,93 @@ fn tool_dialog(gui: &mut Gui, ctx: &Context) {
     let mut reset = false;
     let mut first = false;
     let d = &mut gui.dialogs;
-    egui::Window::new(title).id(Id::new(("tool", title))).collapsible(false).resizable(false).show(ctx, |ui| {
-        match t.kind {
-            ToolKind::Scale => {
-                let s = &mut d.scale;
-                changed |= slider(ui, "Center", &mut s.center, 0, 8192);
-                changed |= slider(ui, "Multiply", &mut s.multiply, -16384, 16384);
-                changed |= slider(ui, "Offset", &mut s.offset, -8192, 8192);
-                changed |= slider(ui, "Tension", &mut s.tension, -8192, 8192);
-            }
-            ToolKind::Decimate => {
-                changed |= slider(ui, "Threshold", &mut d.decimate, 0, 1000);
-            }
-            ToolKind::Filter => {
-                let s = &mut d.filter;
-                changed |= slider(ui, "Width", &mut s.width, 0, 1000);
-                changed |= slider(ui, "Offset", &mut s.offset, -1000, 1000);
-                changed |= slider(ui, "Decimation", &mut s.decimate, 0, 1000);
-                ui.label("Impulse");
-                changed |= kernel_editor(ui, &mut d.kernel);
-                ui.menu_button("Presets", |ui| {
-                    for p in kernel_presets() {
-                        let name = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                        if ui.button(name).clicked() {
-                            if let Ok(data) = std::fs::read(&p) {
-                                d.kernel.load_any(&data);
-                                changed = true;
+    egui::Window::new(title)
+        .id(Id::new(("tool", title)))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            match t.kind {
+                ToolKind::Scale => {
+                    let s = &mut d.scale;
+                    changed |= slider(ui, "Center", &mut s.center, 0, 8192);
+                    changed |= slider(ui, "Multiply", &mut s.multiply, -16384, 16384);
+                    changed |= slider(ui, "Offset", &mut s.offset, -8192, 8192);
+                    changed |= slider(ui, "Tension", &mut s.tension, -8192, 8192);
+                }
+                ToolKind::Decimate => {
+                    changed |= slider(ui, "Threshold", &mut d.decimate, 0, 1000);
+                }
+                ToolKind::Filter => {
+                    let s = &mut d.filter;
+                    changed |= slider(ui, "Width", &mut s.width, 0, 1000);
+                    changed |= slider(ui, "Offset", &mut s.offset, -1000, 1000);
+                    changed |= slider(ui, "Decimation", &mut s.decimate, 0, 1000);
+                    ui.label("Impulse");
+                    changed |= kernel_editor(ui, &mut d.kernel);
+                    ui.menu_button("Presets", |ui| {
+                        for p in kernel_presets() {
+                            let name = p
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            if ui.button(name).clicked() {
+                                if let Ok(data) = std::fs::read(&p) {
+                                    d.kernel.load_any(&data);
+                                    changed = true;
+                                }
+                                ui.close_menu();
                             }
-                            ui.close_menu();
+                        }
+                    });
+                }
+                ToolKind::Smooth => {
+                    let s = &mut d.smooth;
+                    let (a, r, asl, rsl) = (s.attack, s.release, s.attack_slope, s.release_slope);
+                    changed |= slider(ui, "Attack", &mut s.attack, 0, 1000);
+                    changed |= slider(ui, "Release", &mut s.release, 0, 1000);
+                    changed |= slider(ui, "Attack slope", &mut s.attack_slope, 0, 1000);
+                    changed |= slider(ui, "Release slope", &mut s.release_slope, 0, 1000);
+                    if s.link {
+                        // AttWheelChange 0xce4b0: a linked change copies to the other control.
+                        if s.attack != a {
+                            s.release = s.attack;
+                        } else if s.release != r {
+                            s.attack = s.release;
+                        }
+                        if s.attack_slope != asl {
+                            s.release_slope = s.attack_slope;
+                        } else if s.release_slope != rsl {
+                            s.attack_slope = s.release_slope;
                         }
                     }
-                });
-            }
-            ToolKind::Smooth => {
-                let s = &mut d.smooth;
-                let (a, r, asl, rsl) = (s.attack, s.release, s.attack_slope, s.release_slope);
-                changed |= slider(ui, "Attack", &mut s.attack, 0, 1000);
-                changed |= slider(ui, "Release", &mut s.release, 0, 1000);
-                changed |= slider(ui, "Attack slope", &mut s.attack_slope, 0, 1000);
-                changed |= slider(ui, "Release slope", &mut s.release_slope, 0, 1000);
-                if s.link {
-                    // AttWheelChange 0xce4b0: a linked change copies to the other control.
-                    if s.attack != a {
-                        s.release = s.attack;
-                    } else if s.release != r {
-                        s.attack = s.release;
-                    }
-                    if s.attack_slope != asl {
-                        s.release_slope = s.attack_slope;
-                    } else if s.release_slope != rsl {
-                        s.attack_slope = s.release_slope;
-                    }
+                    ui.checkbox(&mut s.link, "Link attack & release controls");
+                    changed |= slider(ui, "Offset", &mut s.offset, -1000, 1000);
+                    changed |= slider(ui, "Decimation", &mut s.decimate, 0, 1000);
                 }
-                ui.checkbox(&mut s.link, "Link attack & release controls");
-                changed |= slider(ui, "Offset", &mut s.offset, -1000, 1000);
-                changed |= slider(ui, "Decimation", &mut s.decimate, 0, 1000);
+                ToolKind::Sequence => {
+                    changed |= sequence_editor(ui, d);
+                }
             }
-            ToolKind::Sequence => {
-                changed |= sequence_editor(ui, d);
-            }
-        }
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button("Reset").clicked() {
-                reset = true;
-            }
-            if ui.button("Accept").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                accept = true;
-            }
-            if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                cancel = true;
-            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Reset").clicked() {
+                    reset = true;
+                }
+                if ui.button("Accept").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    accept = true;
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    cancel = true;
+                }
+            });
+            first = ui.ctx().memory(|m| {
+                m.data
+                    .get_temp::<bool>(Id::new(("tool_open", title)))
+                    .is_none()
+            });
+            ui.ctx()
+                .memory_mut(|m| m.data.insert_temp(Id::new(("tool_open", title)), true));
         });
-        first = ui.ctx().memory(|m| m.data.get_temp::<bool>(Id::new(("tool_open", title))).is_none());
-        ui.ctx().memory_mut(|m| m.data.insert_temp(Id::new(("tool_open", title)), true));
-    });
     if reset {
         match t.kind {
             ToolKind::Scale => d.scale = ScaleSettings::default(),
@@ -294,7 +344,12 @@ fn tool_dialog(gui: &mut Gui, ctx: &Context) {
                 d.filter = FilterSettings::default();
                 d.kernel = default_kernel();
             }
-            ToolKind::Smooth => d.smooth = SmoothSettings { link: true, ..SmoothSettings::default() },
+            ToolKind::Smooth => {
+                d.smooth = SmoothSettings {
+                    link: true,
+                    ..SmoothSettings::default()
+                }
+            }
             ToolKind::Sequence => {
                 d.steps = default_steps();
                 d.seq = SeqSettings::default();
@@ -372,7 +427,8 @@ fn kernel_editor(ui: &mut Ui, k: &mut Envelope) -> bool {
     if let Some(m) = resp.interact_pointer_pos() {
         let pos = ((m.x - r.min.x) / r.width()).clamp(0.0, 1.0) as f64;
         let val = (1.0 - (m.y - r.min.y) / r.height()).clamp(0.0, 1.0) as f64;
-        let near = (0..k.points.len()).min_by(|&a, &b| (abs[a] - pos).abs().total_cmp(&(abs[b] - pos).abs()));
+        let near = (0..k.points.len())
+            .min_by(|&a, &b| (abs[a] - pos).abs().total_cmp(&(abs[b] - pos).abs()));
         if resp.double_clicked() {
             if let Some(i) = near {
                 k.delete_point(i);
@@ -398,10 +454,12 @@ fn sequence_editor(ui: &mut Ui, d: &mut Dialogs) -> bool {
     ui.horizontal(|ui| {
         ui.label("Mode");
         let mut pp = d.seq.ping_pong;
-        egui::ComboBox::from_id_salt("seq_mode").selected_text(if pp { "Ping-pong" } else { "Normal" }).show_ui(ui, |ui| {
-            changed |= ui.selectable_value(&mut pp, false, "Normal").changed();
-            changed |= ui.selectable_value(&mut pp, true, "Ping-pong").changed();
-        });
+        egui::ComboBox::from_id_salt("seq_mode")
+            .selected_text(if pp { "Ping-pong" } else { "Normal" })
+            .show_ui(ui, |ui| {
+                changed |= ui.selectable_value(&mut pp, false, "Normal").changed();
+                changed |= ui.selectable_value(&mut pp, true, "Ping-pong").changed();
+            });
         d.seq.ping_pong = pp;
     });
     // StepVisual: left click steps the type up, right click down (Off / on / hold / stick).
@@ -410,7 +468,10 @@ fn sequence_editor(ui: &mut Ui, d: &mut Dialogs) -> bool {
     let p = ui.painter_at(r);
     let colors = [rgb(0x2b3a45), TIME, VOLUME, rgb(0x6fb4ff)];
     for (i, s) in d.steps.iter().enumerate() {
-        let c = Rect::from_min_size(pos2(r.min.x + i as f32 * cell, r.min.y), vec2(cell - 1.0, 16.0));
+        let c = Rect::from_min_size(
+            pos2(r.min.x + i as f32 * cell, r.min.y),
+            vec2(cell - 1.0, 16.0),
+        );
         p.rect_filled(c, 1.0, colors[s.kind.clamp(0, 3) as usize]);
     }
     if let Some(m) = resp.interact_pointer_pos() {
@@ -425,7 +486,10 @@ fn sequence_editor(ui: &mut Ui, d: &mut Dialogs) -> bool {
     }
     // TargetSelect and LevelVisual.
     ui.horizontal(|ui| {
-        for (k, name) in ["Level", "Decay slope", "Sustain", "Release slope"].iter().enumerate() {
+        for (k, name) in ["Level", "Decay slope", "Sustain", "Release slope"]
+            .iter()
+            .enumerate()
+        {
             if ui.selectable_label(d.seq_field == k, *name).clicked() {
                 d.seq_field = k;
             }
@@ -437,8 +501,19 @@ fn sequence_editor(ui: &mut Ui, d: &mut Dialogs) -> bool {
     p.rect_filled(r, 0.0, rgb(0x1f2a31));
     let max = SEQ_FIELDS[field].1;
     for (i, s) in d.steps.iter().enumerate() {
-        let v = [s.kind, s.brk, s.level, s.decay_slope, s.sustain, s.release_slope][field] as f32 / max as f32;
-        let c = Rect::from_min_max(pos2(r.min.x + i as f32 * cell, r.max.y - v * r.height()), pos2(r.min.x + (i + 1) as f32 * cell - 1.0, r.max.y));
+        let v = [
+            s.kind,
+            s.brk,
+            s.level,
+            s.decay_slope,
+            s.sustain,
+            s.release_slope,
+        ][field] as f32
+            / max as f32;
+        let c = Rect::from_min_max(
+            pos2(r.min.x + i as f32 * cell, r.max.y - v * r.height()),
+            pos2(r.min.x + (i + 1) as f32 * cell - 1.0, r.max.y),
+        );
         p.rect_filled(c, 0.0, if s.kind == 0 { rgb(0x485762) } else { TIME_MIX });
     }
     if let Some(m) = resp.interact_pointer_pos()
@@ -449,7 +524,9 @@ fn sequence_editor(ui: &mut Ui, d: &mut Dialogs) -> bool {
         let v = if alt {
             SEQ_FIELDS[field].0
         } else {
-            ((1.0 - (m.y - r.min.y) / (r.height() - 1.0)) as f64 * max as f64).round().clamp(0.0, max as f64) as i32
+            ((1.0 - (m.y - r.min.y) / (r.height() - 1.0)) as f64 * max as f64)
+                .round()
+                .clamp(0.0, max as f64) as i32
         };
         set_field(&mut d.steps[i], field, v);
         changed = true;
@@ -472,7 +549,14 @@ fn sequence_editor(ui: &mut Ui, d: &mut Dialogs) -> bool {
         }
         if ui.button("Humanize").clicked() {
             for i in 0..32 {
-                let cur = [d.steps[i].kind, d.steps[i].brk, d.steps[i].level, d.steps[i].decay_slope, d.steps[i].sustain, d.steps[i].release_slope][field];
+                let cur = [
+                    d.steps[i].kind,
+                    d.steps[i].brk,
+                    d.steps[i].level,
+                    d.steps[i].decay_slope,
+                    d.steps[i].sustain,
+                    d.steps[i].release_slope,
+                ][field];
                 let v = (cur + d.random(0x199a) as i32 - 0xccc).clamp(0, 0x10000);
                 set_field(&mut d.steps[i], field, v);
             }
@@ -527,17 +611,27 @@ fn random_field(d: &mut Dialogs, f: usize) -> i32 {
 /// Analyze audio file (0xb9610): picks a file, decodes it and runs the analyzer.
 pub fn analyze_file(gui: &mut Gui, bank: usize, index: usize) {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Audio files", &["wav", "aif", "aiff", "wv", "mp3", "ogg", "flac", "m4a"])
+        .add_filter(
+            "Audio files",
+            &["wav", "aif", "aiff", "wv", "mp3", "ogg", "flac", "m4a"],
+        )
         .pick_file()
     else {
         return;
     };
     match crate::decode::decode(&path) {
         Ok((frames, channels, sr)) if !frames.is_empty() => {
-            gui.edit_slot(bank, index, false, |s| s.env.analyze(&frames, channels, sr, 0.0));
+            gui.edit_slot(bank, index, false, |s| {
+                s.env.analyze(&frames, channels, sr, 0.0)
+            });
         }
         Ok(_) => {}
-        Err(e) => gui.dialogs.message = Some(ToolError { title: "Analyze audio file", message: e }),
+        Err(e) => {
+            gui.dialogs.message = Some(ToolError {
+                title: "Analyze audio file",
+                message: e,
+            })
+        }
     }
 }
 
@@ -552,16 +646,18 @@ fn about(gui: &mut Gui, ctx: &Context) {
         gui.dialogs.about_image = Some(ctx.load_texture("about", img, Default::default()));
     }
     let mut open = true;
-    egui::Window::new("About").collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
-        match &gui.dialogs.about_image {
+    egui::Window::new("About")
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .show(ctx, |ui| match &gui.dialogs.about_image {
             Some(t) => {
                 ui.image((t.id(), t.size_vec2()));
             }
             None => {
                 ui.label("Backspin");
             }
-        }
-    });
+        });
     if !open {
         gui.dialogs.about = false;
     }
@@ -571,14 +667,19 @@ fn about(gui: &mut Gui, ctx: &Context) {
 fn load_png(path: &std::path::Path) -> Option<ColorImage> {
     let file = std::fs::File::open(path).ok()?;
     let mut dec = png::Decoder::new(file);
-    dec.set_transformations(png::Transformations::normalize_to_color8() | png::Transformations::ALPHA);
+    dec.set_transformations(
+        png::Transformations::normalize_to_color8() | png::Transformations::ALPHA,
+    );
     let mut reader = dec.read_info().ok()?;
     let mut buf = vec![0; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf).ok()?;
     let (w, h) = (info.width as usize, info.height as usize);
     let rgba: Vec<u8> = match info.color_type {
         png::ColorType::Rgba => buf[..w * h * 4].to_vec(),
-        png::ColorType::GrayscaleAlpha => buf[..w * h * 2].chunks(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect(),
+        png::ColorType::GrayscaleAlpha => buf[..w * h * 2]
+            .chunks(2)
+            .flat_map(|c| [c[0], c[0], c[0], c[1]])
+            .collect(),
         _ => return None,
     };
     Some(ColorImage::from_rgba_unmultiplied([w, h], &rgba))

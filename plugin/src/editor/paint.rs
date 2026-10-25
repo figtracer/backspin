@@ -3,7 +3,9 @@
 //! The FL framework widgets (knob bevels, button styles) were not reverse engineered; they are
 //! drawn after the thumbnail (SPEC.md decision 14). Positions, sizes and colours come from ui.md.
 
-use nih_plug_egui::egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, epaint::PathShape, pos2, vec2};
+use nih_plug_egui::egui::{
+    Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, epaint::PathShape, pos2, vec2,
+};
 use std::f32::consts::{PI, TAU};
 
 /// A colour from `0xRRGGBB`.
@@ -112,14 +114,33 @@ pub fn glyph(p: &Painter, r: Rect, g: Glyph, c: Color32) {
             }
         }
         Glyph::Step => {
-            let pts = [(-0.6, 0.5), (-0.6, 0.1), (-0.2, 0.1), (-0.2, -0.3), (0.2, -0.3), (0.2, 0.2), (0.6, 0.2), (0.6, -0.5)];
-            let v: Vec<Pos2> = pts.iter().map(|(x, y)| pos2(ctr.x + x * w, ctr.y + y * w)).collect();
+            let pts = [
+                (-0.6, 0.5),
+                (-0.6, 0.1),
+                (-0.2, 0.1),
+                (-0.2, -0.3),
+                (0.2, -0.3),
+                (0.2, 0.2),
+                (0.6, 0.2),
+                (0.6, -0.5),
+            ];
+            let v: Vec<Pos2> = pts
+                .iter()
+                .map(|(x, y)| pos2(ctr.x + x * w, ctr.y + y * w))
+                .collect();
             p.add(Shape::line(v, s));
         }
         Glyph::Slide => {
             for dx in [-0.35, 0.15] {
                 let x = ctr.x + dx * w;
-                p.add(Shape::line(vec![pos2(x - 0.2 * w, ctr.y - 0.4 * w), pos2(x + 0.15 * w, ctr.y), pos2(x - 0.2 * w, ctr.y + 0.4 * w)], s));
+                p.add(Shape::line(
+                    vec![
+                        pos2(x - 0.2 * w, ctr.y - 0.4 * w),
+                        pos2(x + 0.15 * w, ctr.y),
+                        pos2(x - 0.2 * w, ctr.y + 0.4 * w),
+                    ],
+                    s,
+                ));
             }
         }
         Glyph::Freeze => {
@@ -148,7 +169,14 @@ pub fn glyph(p: &Painter, r: Rect, g: Glyph, c: Color32) {
                 pos2(ctr.x - 0.6 * w, ctr.y + 0.2 * w),
             ];
             p.add(Shape::convex_polygon(v, c, Stroke::NONE));
-            p.add(Shape::line(vec![pos2(ctr.x + 0.35 * w, ctr.y - 0.3 * w), pos2(ctr.x + 0.5 * w, ctr.y), pos2(ctr.x + 0.35 * w, ctr.y + 0.3 * w)], s));
+            p.add(Shape::line(
+                vec![
+                    pos2(ctr.x + 0.35 * w, ctr.y - 0.3 * w),
+                    pos2(ctr.x + 0.5 * w, ctr.y),
+                    pos2(ctr.x + 0.35 * w, ctr.y + 0.3 * w),
+                ],
+                s,
+            ));
         }
         Glyph::Link => {
             p.circle_stroke(ctr - vec2(0.25 * w, 0.0), 0.32 * w, s);
@@ -164,7 +192,11 @@ pub fn glyph(p: &Painter, r: Rect, g: Glyph, c: Color32) {
         }
         Glyph::Down => {
             p.add(Shape::convex_polygon(
-                vec![pos2(ctr.x - 0.4 * w, ctr.y - 0.2 * w), pos2(ctr.x + 0.4 * w, ctr.y - 0.2 * w), pos2(ctr.x, ctr.y + 0.3 * w)],
+                vec![
+                    pos2(ctr.x - 0.4 * w, ctr.y - 0.2 * w),
+                    pos2(ctr.x + 0.4 * w, ctr.y - 0.2 * w),
+                    pos2(ctr.x, ctr.y + 0.3 * w),
+                ],
                 c,
                 Stroke::NONE,
             ));
@@ -211,7 +243,11 @@ pub fn side_cell(p: &Painter, r: Rect, on: bool) {
         pos2(x + 3.0, y + h - 5.0),
     ];
     let fill = if on { SIDE_STROKE } else { PANEL };
-    p.add(Shape::Path(PathShape::convex_polygon(pts, fill, Stroke::new(2.0f32, SIDE_STROKE))));
+    p.add(Shape::Path(PathShape::convex_polygon(
+        pts,
+        fill,
+        Stroke::new(2.0f32, SIDE_STROKE),
+    )));
 }
 
 /// The H button shape (FUN_000661a0): a chamfered rectangle.
@@ -226,38 +262,69 @@ pub fn h_button(p: &Painter, r: Rect, on: bool) {
         pos2(x + w - 4.0, y + h - 1.0),
     ];
     let fill = if on { SIDE_STROKE } else { PANEL };
-    p.add(Shape::Path(PathShape::convex_polygon(pts, fill, Stroke::new(2.0f32, SIDE_STROKE))));
+    p.add(Shape::Path(PathShape::convex_polygon(
+        pts,
+        fill,
+        Stroke::new(2.0f32, SIDE_STROKE),
+    )));
 }
 
 /// A TVectorWheel knob. `t` is the normalized value (0..1), `centered` draws from the middle.
 /// `gap_right` puts the rail gap at the right (the mix knobs), else at the bottom.
-pub fn knob(p: &Painter, r: Rect, t: f32, fill: Color32, centered: bool, gap_right: bool, pressed: bool) {
+pub fn knob(
+    p: &Painter,
+    r: Rect,
+    t: f32,
+    fill: Color32,
+    centered: bool,
+    gap_right: bool,
+    pressed: bool,
+) {
     let c = r.center();
     let rad = r.width().min(r.height()) * 0.5 - 2.0;
     // Angles in screen space, clockwise from the right. The rail spans 270 degrees.
-    let (a0, a1) = if gap_right { (PI * 0.25, PI * 1.75) } else { (PI * 0.75, PI * 2.25) };
+    let (a0, a1) = if gap_right {
+        (PI * 0.25, PI * 1.75)
+    } else {
+        (PI * 0.75, PI * 2.25)
+    };
     let arc = |from: f32, to: f32| -> Vec<Pos2> {
         let n = 48;
-        (0..=n).map(|i| {
-            let a = from + (to - from) * i as f32 / n as f32;
-            c + vec2(a.cos(), a.sin()) * rad
-        }).collect()
+        (0..=n)
+            .map(|i| {
+                let a = from + (to - from) * i as f32 / n as f32;
+                c + vec2(a.cos(), a.sin()) * rad
+            })
+            .collect()
     };
     p.add(Shape::line(arc(a0, a1), Stroke::new(4.0f32, KNOB_RAIL)));
     let col = if pressed { KNOB_PRESSED } else { fill };
     let at = a0 + (a1 - a0) * t.clamp(0.0, 1.0);
     let from = if centered { (a0 + a1) * 0.5 } else { a0 };
     if (at - from).abs() > 1e-3 {
-        p.add(Shape::line(arc(from.min(at), from.max(at)), Stroke::new(4.0f32, col)));
+        p.add(Shape::line(
+            arc(from.min(at), from.max(at)),
+            Stroke::new(4.0f32, col),
+        ));
     }
     p.circle_filled(c, rad * 0.6, KNOB_RAIL);
     let d = vec2(at.cos(), at.sin());
-    p.line_segment([c + d * rad * 0.15, c + d * rad * 0.55], Stroke::new(2.0f32, lighten(KNOB_RAIL, 0x60)));
+    p.line_segment(
+        [c + d * rad * 0.15, c + d * rad * 0.55],
+        Stroke::new(2.0f32, lighten(KNOB_RAIL, 0x60)),
+    );
 }
 
 /// The scratch clock (TScratchWheel paint 0x60690). `value` is parameter 8 (65536 = no offset),
 /// `live` the live scratch position while playing.
-pub fn scratch_clock(p: &Painter, r: Rect, value: f32, hand: Color32, pressed: bool, live: Option<f32>) {
+pub fn scratch_clock(
+    p: &Painter,
+    r: Rect,
+    value: f32,
+    hand: Color32,
+    pressed: bool,
+    live: Option<f32>,
+) {
     p.rect_filled(r, 0.0, Color32::BLACK);
     let inner = r.shrink(1.0);
     p.rect_filled(inner, 0.0, rgb(0x4e5962));
@@ -265,7 +332,10 @@ pub fn scratch_clock(p: &Painter, r: Rect, value: f32, hand: Color32, pressed: b
     let n = 12;
     for i in 0..n {
         let t = i as f32 / n as f32;
-        let band = Rect::from_min_max(pos2(g.min.x, g.min.y + g.height() * t), pos2(g.max.x, g.min.y + g.height() * (t + 1.0 / n as f32)));
+        let band = Rect::from_min_max(
+            pos2(g.min.x, g.min.y + g.height() * t),
+            pos2(g.max.x, g.min.y + g.height() * (t + 1.0 / n as f32)),
+        );
         p.rect_filled(band, 0.0, mix(rgb(0x7c8790), rgb(0x4e5962), t));
     }
     let c = r.center();
@@ -274,7 +344,15 @@ pub fn scratch_clock(p: &Painter, r: Rect, value: f32, hand: Color32, pressed: b
     for k in 0..16 {
         let a = k as f32 * TAU / 16.0;
         let pt = c + vec2(a.cos(), a.sin()) * 32.0 * s;
-        p.circle_filled(pt, 1.0 * s, if k % 2 == 0 { Color32::WHITE } else { rgb(0x99a5ad) });
+        p.circle_filled(
+            pt,
+            1.0 * s,
+            if k % 2 == 0 {
+                Color32::WHITE
+            } else {
+                rgb(0x99a5ad)
+            },
+        );
     }
     let hand_col = if pressed { Color32::WHITE } else { hand };
     let angle = PI - value / 65536.0 * TAU;
@@ -295,7 +373,10 @@ pub fn gradient_rect(p: &Painter, r: Rect, top: Color32, bottom: Color32) {
     for i in 0..n {
         let t0 = i as f32 / n as f32;
         let t1 = (i + 1) as f32 / n as f32;
-        let band = Rect::from_min_max(pos2(r.min.x, r.min.y + r.height() * t0), pos2(r.max.x, r.min.y + r.height() * t1));
+        let band = Rect::from_min_max(
+            pos2(r.min.x, r.min.y + r.height() * t0),
+            pos2(r.max.x, r.min.y + r.height() * t1),
+        );
         p.rect_filled(band, 0.0, mix(top, bottom, (t0 + t1) * 0.5));
     }
 }
@@ -303,6 +384,10 @@ pub fn gradient_rect(p: &Painter, r: Rect, top: Color32, bottom: Color32) {
 /// A rounded "pill" (the group tags): rect with a round right end.
 pub fn pill(p: &Painter, r: Rect, fill: Color32) {
     let rad = r.height() * 0.5;
-    p.rect_filled(Rect::from_min_max(r.min, pos2(r.max.x - rad, r.max.y)), 0.0, fill);
+    p.rect_filled(
+        Rect::from_min_max(r.min, pos2(r.max.x - rad, r.max.y)),
+        0.0,
+        fill,
+    );
     p.circle_filled(pos2(r.max.x - rad, r.center().y), rad, fill);
 }

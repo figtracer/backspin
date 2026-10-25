@@ -136,7 +136,12 @@ impl Shared {
     /// Sends the model's slot to the audio thread.
     pub fn send_slot(&self, model: &Engine, bank: usize, index: usize, rearm: bool) {
         let slot = Box::new(model.banks[bank].slots[index].clone());
-        self.send(Command::Slot { bank, index, slot, rearm });
+        self.send(Command::Slot {
+            bank,
+            index,
+            slot,
+            rearm,
+        });
     }
 
     /// The saved state of the model, with the parameters the audio engine plays.

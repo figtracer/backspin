@@ -18,7 +18,12 @@ pub fn decode(path: &Path) -> Result<(Vec<[f32; 2]>, usize, f64), String> {
         hint.with_extension(ext);
     }
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| e.to_string())?;
     let mut format = probed.format;
     let track = format.default_track().ok_or("no audio track")?;
@@ -26,13 +31,17 @@ pub fn decode(path: &Path) -> Result<(Vec<[f32; 2]>, usize, f64), String> {
     let params = track.codec_params.clone();
     let channels = params.channels.map_or(1, |c| c.count());
     let sr = params.sample_rate.ok_or("unknown sample rate")? as f64;
-    let mut dec = symphonia::default::get_codecs().make(&params, &DecoderOptions::default()).map_err(|e| e.to_string())?;
+    let mut dec = symphonia::default::get_codecs()
+        .make(&params, &DecoderOptions::default())
+        .map_err(|e| e.to_string())?;
     let mut frames = Vec::new();
     while let Ok(packet) = format.next_packet() {
         if packet.track_id() != id {
             continue;
         }
-        let Ok(buf) = dec.decode(&packet) else { continue };
+        let Ok(buf) = dec.decode(&packet) else {
+            continue;
+        };
         let mut s = SampleBuffer::<f32>::new(buf.capacity() as u64, *buf.spec());
         s.copy_interleaved_ref(buf);
         for f in s.samples().chunks(channels.max(1)) {

@@ -8,7 +8,10 @@ use super::{Gui, SNAP_DIV, menus};
 use backspin_engine::envelope::{Cursor, Envelope};
 use backspin_engine::time_text;
 use nih_plug::prelude::ParamSetter;
-use nih_plug_egui::egui::{self, Align2, Color32, CursorIcon, Id, Key, PointerButton, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2};
+use nih_plug_egui::egui::{
+    self, Align2, Color32, CursorIcon, Id, Key, PointerButton, Pos2, Rect, Sense, Shape, Stroke,
+    Ui, pos2,
+};
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 
@@ -29,11 +32,24 @@ enum Drag {
     #[default]
     None,
     /// Moving the selected points: their start positions and values, and the pointer start.
-    Points { anchor: usize, xs: Vec<f64>, vs: Vec<f32>, start: (f64, f64) },
+    Points {
+        anchor: usize,
+        xs: Vec<f64>,
+        vs: Vec<f32>,
+        start: (f64, f64),
+    },
     /// Moving a tension: the start tensions and the accumulated travel.
-    Tension { i: usize, start: Vec<f32>, travel: f32 },
+    Tension {
+        i: usize,
+        start: Vec<f32>,
+        travel: f32,
+    },
     /// Rubber band selection from this pointer position; `add` keeps the old selection.
-    Rubber { from: Pos2, add: bool, base: Vec<bool> },
+    Rubber {
+        from: Pos2,
+        add: bool,
+        base: Vec<bool>,
+    },
     /// Step editing: the last pointer position.
     Step { last: Pos2, pulse: bool },
     /// Step erase: the last pointer x.
@@ -92,7 +108,10 @@ fn columns(env: &Envelope, v: &View) -> Vec<Pos2> {
         if i > 0 {
             c.step_once(env, step);
         }
-        out.push(pos2(v.r.min.x + i as f32 * v.r.width() / (n - 1) as f32, v.y(c.out)));
+        out.push(pos2(
+            v.r.min.x + i as f32 * v.r.width() / (n - 1) as f32,
+            v.y(c.out),
+        ));
     }
     out
 }
@@ -132,7 +151,10 @@ pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: Rect) {
     let (mut env, ghost) = {
         let m = gui.shared.model.lock();
         let other = &m.banks[group ^ 1].slots[gui.edited[group ^ 1]];
-        (m.banks[group].slots[index].env.clone(), (!other.empty).then(|| other.env.clone()))
+        (
+            m.banks[group].slots[index].env.clone(),
+            (!other.empty).then(|| other.env.clone()),
+        )
     };
     let v = View { r, len: env.length };
     let resp = ui.interact(r, Id::new("envelope"), Sense::click_and_drag());
@@ -152,10 +174,19 @@ pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: Rect) {
                 time_text(env.abs_pos(i), true),
                 value_text(env.points[i].value as f64)
             ),
-            Hover::Handle(i) if !gui.freeze => format!("{:.0}% - Point {} to {} tension", env.points[i].tension * 100.0, i, i + 1),
+            Hover::Handle(i) if !gui.freeze => format!(
+                "{:.0}% - Point {} to {} tension",
+                env.points[i].tension * 100.0,
+                i,
+                i + 1
+            ),
             _ => {
                 let pos = v.pos(p.x).clamp(0.0, v.len);
-                format!("In: {} out: {}", time_text(pos, true), value_text(env.value_at(pos)))
+                format!(
+                    "In: {} out: {}",
+                    time_text(pos, true),
+                    value_text(env.value_at(pos))
+                )
             }
         };
     }
@@ -168,22 +199,43 @@ pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: Rect) {
 
 /// The mini preview of compact mode (72 x 72, editing frozen).
 pub fn preview(gui: &mut Gui, ui: &mut Ui, r: Rect) {
-    let env = gui.shared.model.lock().banks[0].slots[gui.edited[0]].env.clone();
+    let env = gui.shared.model.lock().banks[0].slots[gui.edited[0]]
+        .env
+        .clone();
     let v = View { r, len: env.length };
     let p = ui.painter();
     p.rect_filled(r, 0.0, rgb(0x344b5b));
     p.add(Shape::line(columns(&env, &v), Stroke::new(1.0f32, TIME)));
-    p.rect_stroke(r, 0.0, Stroke::new(2.0f32, rgba(0x000000, 0x78)), egui::StrokeKind::Inside);
-    p.rect_stroke(r.shrink(2.0), 0.0, Stroke::new(1.0f32, rgba(0x000000, 0x3c)), egui::StrokeKind::Inside);
+    p.rect_stroke(
+        r,
+        0.0,
+        Stroke::new(2.0f32, rgba(0x000000, 0x78)),
+        egui::StrokeKind::Inside,
+    );
+    p.rect_stroke(
+        r.shrink(2.0),
+        0.0,
+        Stroke::new(1.0f32, rgba(0x000000, 0x3c)),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// Mouse gestures (EnvVisualMouseDown 0xb25c0). Returns true if the envelope changed.
-fn interact(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, resp: &egui::Response, v: &View, env: &mut Envelope) -> bool {
+fn interact(
+    gui: &mut Gui,
+    ui: &mut Ui,
+    setter: &ParamSetter,
+    resp: &egui::Response,
+    v: &View,
+    env: &mut Envelope,
+) -> bool {
     let mods = ui.input(|i| i.modifiers);
     let snap_on = (gui.snap > 0) ^ mods.alt;
     let (gx, gy) = grid(gui);
     let mut changed = false;
-    let pointer = resp.interact_pointer_pos().or_else(|| ui.ctx().pointer_hover_pos());
+    let pointer = resp
+        .interact_pointer_pos()
+        .or_else(|| ui.ctx().pointer_hover_pos());
 
     // Hover.
     if matches!(gui.env.drag, Drag::None)
@@ -222,7 +274,8 @@ fn interact(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, resp: &egui::Respo
     let pos = v.pos(p.x).clamp(0.0, v.len);
     let val = v.val(p.y).clamp(0.0, 1.0);
     let pressed = |b| ui.input(|i| i.pointer.button_pressed(b)) && v.r.contains(p);
-    let double = ui.input(|i| i.pointer.button_double_clicked(PointerButton::Primary)) && v.r.contains(p);
+    let double =
+        ui.input(|i| i.pointer.button_double_clicked(PointerButton::Primary)) && v.r.contains(p);
 
     // Double-click: delete a point, reset a tension, or add a point.
     if double {
@@ -244,7 +297,10 @@ fn interact(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, resp: &egui::Respo
     if pressed(PointerButton::Primary) {
         gui.env.point_menu = None;
         if gui.step {
-            gui.env.drag = Drag::Step { last: p, pulse: mods.shift };
+            gui.env.drag = Drag::Step {
+                last: p,
+                pulse: mods.shift,
+            };
             changed |= step_edit(gui, env, v, p, p, snap_on, mods.shift);
         } else {
             match gui.env.hover {
@@ -261,7 +317,12 @@ fn interact(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, resp: &egui::Respo
                     }
                     let xs = (0..env.points.len()).map(|k| env.abs_pos(k)).collect();
                     let vs = env.points.iter().map(|q| q.value).collect();
-                    gui.env.drag = Drag::Points { anchor: i, xs, vs, start: (pos, val) };
+                    gui.env.drag = Drag::Points {
+                        anchor: i,
+                        xs,
+                        vs,
+                        start: (pos, val),
+                    };
                 }
                 Hover::Handle(i) if mods.alt => {
                     env.points[i].tension = 0.0;
@@ -270,11 +331,23 @@ fn interact(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, resp: &egui::Respo
                 }
                 Hover::Handle(i) => {
                     let start = env.points.iter().map(|q| q.tension).collect();
-                    gui.env.drag = Drag::Tension { i, start, travel: 0.0 };
+                    gui.env.drag = Drag::Tension {
+                        i,
+                        start,
+                        travel: 0.0,
+                    };
                 }
                 Hover::None if mods.command || mods.shift => {
-                    let base = env.points.iter().map(|q| q.selected() && mods.shift).collect();
-                    gui.env.drag = Drag::Rubber { from: p, add: mods.shift, base };
+                    let base = env
+                        .points
+                        .iter()
+                        .map(|q| q.selected() && mods.shift)
+                        .collect();
+                    gui.env.drag = Drag::Rubber {
+                        from: p,
+                        add: mods.shift,
+                        base,
+                    };
                 }
                 Hover::None => {
                     if env.selected_count() > 0 {
@@ -312,7 +385,12 @@ fn interact(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, resp: &egui::Respo
                     if let Some(i) = add_point(gui, env, v, p, snap_on, mods.shift) {
                         let xs = (0..env.points.len()).map(|k| env.abs_pos(k)).collect();
                         let vs = env.points.iter().map(|q| q.value).collect();
-                        gui.env.drag = Drag::Points { anchor: i, xs, vs, start: (env.abs_pos(i), env.points[i].value as f64) };
+                        gui.env.drag = Drag::Points {
+                            anchor: i,
+                            xs,
+                            vs,
+                            start: (env.abs_pos(i), env.points[i].value as f64),
+                        };
                     }
                     changed = true;
                 }
@@ -329,12 +407,25 @@ fn interact(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, resp: &egui::Respo
     let down = ui.input(|i| i.pointer.any_down());
     match &mut gui.env.drag {
         Drag::None => {}
-        Drag::Points { anchor, xs, vs, start } => {
+        Drag::Points {
+            anchor,
+            xs,
+            vs,
+            start,
+        } => {
             let (anchor, xs, vs, start) = (*anchor, xs.clone(), vs.clone(), *start);
             let free = mods.shift && mods.command;
             let snapping = snap_on && !free;
-            let mut dpos = if mods.command && !free { 0.0 } else { pos - start.0 };
-            let mut dval = if mods.shift && !free { 0.0 } else { val - start.1 };
+            let mut dpos = if mods.command && !free {
+                0.0
+            } else {
+                pos - start.0
+            };
+            let mut dval = if mods.shift && !free {
+                0.0
+            } else {
+                val - start.1
+            };
             if snapping {
                 if dpos != 0.0 {
                     dpos = snap(xs[anchor] + dpos, gx) - xs[anchor];
@@ -418,7 +509,14 @@ fn env_selected_peer(k: usize, i: usize) -> bool {
 
 /// Adds a point at the pointer ("add point"). Returns its index, or `None` if the click was on
 /// the curve with snap off (the point goes on the curve and the gesture ends).
-fn add_point(gui: &mut Gui, env: &mut Envelope, v: &View, p: Pos2, snap_on: bool, shift: bool) -> Option<usize> {
+fn add_point(
+    gui: &mut Gui,
+    env: &mut Envelope,
+    v: &View,
+    p: Pos2,
+    snap_on: bool,
+    shift: bool,
+) -> Option<usize> {
     let (gx, gy) = grid(gui);
     let mut pos = v.pos(p.x).clamp(0.0, v.len);
     let mut val = v.val(p.y).clamp(0.0, 1.0);
@@ -458,7 +556,9 @@ fn move_points(env: &mut Envelope, xs: &[f64], vs: &[f32], dpos: f64, dval: f64,
             continue;
         }
         let prev = (0..k).rev().find(|&j| !moves(j)).map_or(0.0, |j| xs[j]);
-        let next = (k + 1..n).find(|&j| !moves(j)).map_or(env.length, |j| xs[j]);
+        let next = (k + 1..n)
+            .find(|&j| !moves(j))
+            .map_or(env.length, |j| xs[j]);
         lo = lo.max(prev - xs[k]);
         hi = hi.min(next - xs[k]);
     }
@@ -483,13 +583,25 @@ fn move_points(env: &mut Envelope, xs: &[f64], vs: &[f32], dpos: f64, dval: f64,
 /// Step editing between two pointer positions: every pixel column crossed gets a point with the
 /// value interpolated along the drag. A point inside the column (or the snap step) moves,
 /// otherwise a new point goes in. Shift ("pulse mode") makes new points Hold with tension 0.
-fn step_edit(gui: &mut Gui, env: &mut Envelope, v: &View, from: Pos2, to: Pos2, snap_on: bool, pulse: bool) -> bool {
+fn step_edit(
+    gui: &mut Gui,
+    env: &mut Envelope,
+    v: &View,
+    from: Pos2,
+    to: Pos2,
+    snap_on: bool,
+    pulse: bool,
+) -> bool {
     let (gx, gy) = grid(gui);
     let (x0, x1) = (from.x.min(to.x), from.x.max(to.x));
     let mut changed = false;
     let mut x = x0.floor();
     while x <= x1.ceil() {
-        let t = if (to.x - from.x).abs() < 1e-3 { 1.0 } else { (x - from.x) / (to.x - from.x) };
+        let t = if (to.x - from.x).abs() < 1e-3 {
+            1.0
+        } else {
+            (x - from.x) / (to.x - from.x)
+        };
         let y = from.y + (to.y - from.y) * t.clamp(0.0, 1.0);
         let mut pos = v.pos(x).clamp(0.0, v.len);
         let mut val = v.val(y).clamp(0.0, 1.0);
@@ -509,12 +621,23 @@ fn step_edit(gui: &mut Gui, env: &mut Envelope, v: &View, from: Pos2, to: Pos2, 
                 }
             }
             None => {
-                let i = env.insert_point(pos, val as f32, if pulse { 0.0 } else { gui.last_tension }, true, false);
+                let i = env.insert_point(
+                    pos,
+                    val as f32,
+                    if pulse { 0.0 } else { gui.last_tension },
+                    true,
+                    false,
+                );
                 env.points[i].shape = if pulse { 2 } else { gui.default_shape };
                 changed = true;
             }
         }
-        x += if snap_on { (gx / v.len) as f32 * v.r.width() } else { 1.0 }.max(1.0);
+        x += if snap_on {
+            (gx / v.len) as f32 * v.r.width()
+        } else {
+            1.0
+        }
+        .max(1.0);
     }
     env.prepare();
     changed
@@ -543,10 +666,21 @@ fn shortcuts(gui: &mut Gui, ui: &Ui, resp: &egui::Response, env: &mut Envelope) 
         return false;
     }
     let (cmd, keys) = ui.input(|i| {
-        let keys: Vec<Key> = [Key::A, Key::D, Key::I, Key::X, Key::C, Key::V, Key::R, Key::B, Key::Delete, Key::Backspace]
-            .into_iter()
-            .filter(|k| i.key_pressed(*k))
-            .collect();
+        let keys: Vec<Key> = [
+            Key::A,
+            Key::D,
+            Key::I,
+            Key::X,
+            Key::C,
+            Key::V,
+            Key::R,
+            Key::B,
+            Key::Delete,
+            Key::Backspace,
+        ]
+        .into_iter()
+        .filter(|k| i.key_pressed(*k))
+        .collect();
         (i.modifiers.command, keys)
     });
     let mut changed = false;
@@ -585,9 +719,21 @@ fn shortcuts(gui: &mut Gui, ui: &Ui, resp: &egui::Response, env: &mut Envelope) 
 }
 
 /// Draws the editor (ui.md 5.4).
-fn draw(gui: &mut Gui, ui: &Ui, v: &View, env: &Envelope, ghost: Option<&Envelope>, group: usize, index: usize) {
+fn draw(
+    gui: &mut Gui,
+    ui: &Ui,
+    v: &View,
+    env: &Envelope,
+    ghost: Option<&Envelope>,
+    group: usize,
+    index: usize,
+) {
     let p = ui.painter().with_clip_rect(v.r);
-    let mut bg = if gui.invert_grid { rgb(0x344b5b) } else { rgb(0x294050) };
+    let mut bg = if gui.invert_grid {
+        rgb(0x344b5b)
+    } else {
+        rgb(0x294050)
+    };
     if gui.freeze {
         bg = mix(bg, rgb(0x2fc8fb), 32.0 / 256.0);
     }
@@ -596,24 +742,43 @@ fn draw(gui: &mut Gui, ui: &Ui, v: &View, env: &Envelope, ghost: Option<&Envelop
     } else {
         p.rect_filled(v.r, 0.0, bg);
     }
-    let shade = |k: i32| if gui.invert_grid { lighten(bg, -k) } else { lighten(bg, k) };
+    let shade = |k: i32| {
+        if gui.invert_grid {
+            lighten(bg, -k)
+        } else {
+            lighten(bg, k)
+        }
+    };
     // Vertical grid: snap steps, beats, the bar ends.
     let (gx, _) = grid(gui);
     let steps = (v.len / gx).round() as i32;
     for k in 0..=steps {
         let pos = k as f64 * gx;
         let x = v.x(pos).round() + 0.5;
-        let strength = if pos.fract() == 0.0 { if (pos % 4.0) == 0.0 { 0x34 } else { 0x18 } } else { 8 };
-        p.line_segment([pos2(x, v.r.min.y), pos2(x, v.r.max.y)], Stroke::new(1.0f32, shade(strength)));
+        let strength = if pos.fract() == 0.0 {
+            if (pos % 4.0) == 0.0 { 0x34 } else { 0x18 }
+        } else {
+            8
+        };
+        p.line_segment(
+            [pos2(x, v.r.min.y), pos2(x, v.r.max.y)],
+            Stroke::new(1.0f32, shade(strength)),
+        );
     }
     // Horizontal grid: eighths of the range (one beat of delay each on the time lane).
     for k in 1..8 {
         let y = v.y(1.0 - k as f64 / 8.0).round() + 0.5;
-        p.line_segment([pos2(v.r.min.x, y), pos2(v.r.max.x, y)], Stroke::new(1.0f32, shade(if k == 4 { 0x18 } else { 8 })));
+        p.line_segment(
+            [pos2(v.r.min.x, y), pos2(v.r.max.x, y)],
+            Stroke::new(1.0f32, shade(if k == 4 { 0x18 } else { 8 })),
+        );
     }
     // Watermark.
     let wm = p.layout_no_wrap("Backspin".into(), font(46.0), rgba(0x000000, 0x32));
-    let at = pos2(v.r.max.x - 10.0 - wm.size().x, v.r.max.y - 5.0 - wm.size().y);
+    let at = pos2(
+        v.r.max.x - 10.0 - wm.size().x,
+        v.r.max.y - 5.0 - wm.size().y,
+    );
     if v.r.height() > 0.85 * wm.size().y && v.r.width() > wm.size().x * 0.5 {
         p.galley(at, wm, rgba(0x000000, 0x32));
     }
@@ -622,13 +787,27 @@ fn draw(gui: &mut Gui, ui: &Ui, v: &View, env: &Envelope, ghost: Option<&Envelop
         for k in 1..8 {
             let y = v.y(1.0 - k as f64 / 8.0);
             let (l, t, rr, b) = (v.r.min.x, y - 6.0, v.r.min.x + 22.0, y + 6.0);
-            p.add(Shape::convex_polygon(vec![pos2(l, t), pos2(rr, t), pos2(l + 0.6 * 22.0, b), pos2(l, b)], rgb(0x25313b), Stroke::NONE));
-            p.text(pos2(l + 3.0, y), Align2::LEFT_CENTER, format!("-{k}"), font(9.5), rgb(0x8595a0));
+            p.add(Shape::convex_polygon(
+                vec![pos2(l, t), pos2(rr, t), pos2(l + 0.6 * 22.0, b), pos2(l, b)],
+                rgb(0x25313b),
+                Stroke::NONE,
+            ));
+            p.text(
+                pos2(l + 3.0, y),
+                Align2::LEFT_CENTER,
+                format!("-{k}"),
+                font(9.5),
+                rgb(0x8595a0),
+            );
         }
     }
     // The other group's envelope as a ghost line.
     if let Some(g) = ghost {
-        let c = if group == 0 { rgb(0x7d6e5c) } else { rgb(0x5c8556) };
+        let c = if group == 0 {
+            rgb(0x7d6e5c)
+        } else {
+            rgb(0x5c8556)
+        };
         p.add(Shape::line(columns(g, v), Stroke::new(1.0f32, c)));
     }
     // The envelope.
@@ -639,8 +818,16 @@ fn draw(gui: &mut Gui, ui: &Ui, v: &View, env: &Envelope, ghost: Option<&Envelop
         for i in 1..env.points.len() {
             if let Some(q) = handle_pos(env, v, i) {
                 let hovered = gui.env.hover == Hover::Handle(i);
-                let rad = if hovered { env.points[i].tension.abs() * 1.9 + 2.5 } else { 3.5 };
-                p.circle_stroke(q, rad, Stroke::new(1.0f32, alpha(pc, if hovered { 255 } else { 150 })));
+                let rad = if hovered {
+                    env.points[i].tension.abs() * 1.9 + 2.5
+                } else {
+                    3.5
+                };
+                p.circle_stroke(
+                    q,
+                    rad,
+                    Stroke::new(1.0f32, alpha(pc, if hovered { 255 } else { 150 })),
+                );
             }
         }
         let xs: Vec<f32> = (0..env.points.len()).map(|i| v.x(env.abs_pos(i))).collect();
@@ -652,7 +839,11 @@ fn draw(gui: &mut Gui, ui: &Ui, v: &View, env: &Envelope, ghost: Option<&Envelop
             if hovered {
                 p.circle_filled(c, 9.0, rgba(0xffffff, 0x20));
             }
-            p.circle_filled(c, 2.65 + if hovered { 0.9 } else { 0.0 }, alpha(pc, (a * 255.0) as u8));
+            p.circle_filled(
+                c,
+                2.65 + if hovered { 0.9 } else { 0.0 },
+                alpha(pc, (a * 255.0) as u8),
+            );
             if q.selected() {
                 p.circle_stroke(c, 4.0, Stroke::new(1.5f32, SELECT_RING));
             }
@@ -671,10 +862,17 @@ fn draw(gui: &mut Gui, ui: &Ui, v: &View, env: &Envelope, ghost: Option<&Envelop
             let (x1, x0) = (*w.0, *w.1);
             if x0 < x1 && x1 - x0 < v.r.width() * 0.5 {
                 let a = (0.82f32.powi(k as i32 + 1) * 128.0) as u8;
-                p.rect_filled(Rect::from_min_max(pos2(x0, v.r.min.y), pos2(x1, v.r.max.y)), 0.0, alpha(lc, a / 3));
+                p.rect_filled(
+                    Rect::from_min_max(pos2(x0, v.r.min.y), pos2(x1, v.r.max.y)),
+                    0.0,
+                    alpha(lc, a / 3),
+                );
             }
         }
-        p.line_segment([pos2(x, v.r.min.y), pos2(x, v.r.max.y)], Stroke::new(1.0f32, lc));
+        p.line_segment(
+            [pos2(x, v.r.min.y), pos2(x, v.r.max.y)],
+            Stroke::new(1.0f32, lc),
+        );
         ui.ctx().request_repaint();
     } else {
         trail.clear();
