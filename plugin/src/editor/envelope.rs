@@ -612,7 +612,7 @@ fn draw(gui: &mut Gui, ui: &Ui, v: &View, env: &Envelope, ghost: Option<&Envelop
         p.line_segment([pos2(v.r.min.x, y), pos2(v.r.max.x, y)], Stroke::new(1.0f32, shade(if k == 4 { 0x18 } else { 8 })));
     }
     // Watermark.
-    let wm = p.layout_no_wrap("Gross Beat".into(), font(46.0), rgba(0x000000, 0x32));
+    let wm = p.layout_no_wrap("Backspin".into(), font(46.0), rgba(0x000000, 0x32));
     let at = pos2(v.r.max.x - 10.0 - wm.size().x, v.r.max.y - 5.0 - wm.size().y);
     if v.r.height() > 0.85 * wm.size().y && v.r.width() > wm.size().x * 0.5 {
         p.galley(at, wm, rgba(0x000000, 0x32));

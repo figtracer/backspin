@@ -1,6 +1,6 @@
 [package]
 name = "backspin"
-description = "A port of Image-Line Gross Beat as a CLAP and VST3 plugin."
+description = "Backspin: a time and volume gating effect as a CLAP and VST3 plugin."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

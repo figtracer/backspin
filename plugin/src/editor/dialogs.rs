@@ -558,7 +558,7 @@ fn about(gui: &mut Gui, ctx: &Context) {
                 ui.image((t.id(), t.size_vec2()));
             }
             None => {
-                ui.label("Backspin: a port of Image-Line Gross Beat.");
+                ui.label("Backspin");
             }
         }
     });

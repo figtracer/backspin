@@ -5,7 +5,7 @@ use crate::plugin_check::{Check, Host, state_json};
 use std::ffi::{CString, c_char, c_void};
 
 const BINARY: &str = "target/bundled/Backspin.vst3/Contents/MacOS/Backspin";
-const CLASS_ID: [u8; 16] = *b"BackspinGrossBt1";
+const CLASS_ID: [u8; 16] = *b"BackspinFxPlugin";
 const K_RESULT_OK: i32 = 0;
 
 /// Interface IDs in the byte order of non-Windows platforms (the four 32-bit words big endian).
