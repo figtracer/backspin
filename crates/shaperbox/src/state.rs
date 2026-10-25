@@ -95,6 +95,20 @@ impl Band {
         }
     }
 
+    pub fn boolean(&self, id: &str, default: bool) -> bool {
+        match self.values.iter().find(|(k, _)| k == id).map(|(_, v)| v) {
+            Some(Var::Bool(b)) => *b,
+            _ => default,
+        }
+    }
+
+    pub fn string(&self, id: &str) -> Option<&str> {
+        match self.values.iter().find(|(k, _)| k == id).map(|(_, v)| v) {
+            Some(Var::String(s)) => Some(s),
+            _ => None,
+        }
+    }
+
     pub fn section(&self, id: &str) -> Option<&Section> {
         self.sections.iter().find(|s| s.id == id)
     }

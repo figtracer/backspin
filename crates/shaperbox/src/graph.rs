@@ -5,7 +5,8 @@
 use crate::bandsplit::{Bands, Bandsplit, multiband_sum};
 use crate::ftz::FlushToZero;
 use crate::shapers::{
-    Wave as Port, dry_wet, liquid::LiquidBand, pan::PanBand, time::TimeBand, volume, width,
+    Wave as Port, dry_wet, liquid::LiquidBand, noise::NoiseBand, pan::PanBand, time::TimeBand,
+    volume, width,
 };
 use crate::smoother::Smoother;
 use crate::state::{Band, Lfo, State};
@@ -100,6 +101,7 @@ struct BandRt {
     haas_mix: Smoother,
     pan: Option<PanBand>,
     liquid: Option<LiquidBand>,
+    noise: Option<NoiseBand>,
     stereo_offset: Smoother,
     time: Option<Box<TimeBand>>,
     dry: Vec<[f32; 2]>,
@@ -117,6 +119,7 @@ impl BandRt {
             haas_mix: Smoother::new(band.float("haasMix", 0.0), sr as f64, 0.0),
             pan: (shaper == 3).then(|| PanBand::new(sr)),
             liquid: (shaper == 11).then(|| LiquidBand::new(sr)),
+            noise: (shaper == 8).then(|| NoiseBand::new(sr, band as *const Band as usize as i32)),
             stereo_offset: Smoother::new(band.float("stereoOffset", 0.5), sr as f64, 0.0),
             time: (shaper == 0).then(|| Box::new(TimeBand::new(sr))),
             dry: Vec::with_capacity(BLOCK),
@@ -253,6 +256,23 @@ impl Processor {
                             volume::process(audio, port, &brt.gain);
                         }
                         7 => width::process(audio, port, band.float("gain", 0.5)),
+                        8 => {
+                            let file = band.string("file").unwrap_or("");
+                            let generated =
+                                file.ends_with(".generated") && !file.contains("/0 Off");
+                            if let Some(nb) = brt.noise.as_mut() {
+                                nb.process(
+                                    audio,
+                                    port,
+                                    band.float("gain", 0.8),
+                                    band.float("lpCutoff", 1.0),
+                                    band.float("hpCutoff", 0.254),
+                                    band.boolean("isMono", false),
+                                    band.boolean("solo", false),
+                                    generated,
+                                );
+                            }
+                        }
                         11 => {
                             brt.stereo_offset
                                 .process(band.float("stereoOffset", 0.5), n);
