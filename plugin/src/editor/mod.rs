@@ -88,6 +88,9 @@ pub struct Gui {
     last_status: [i32; 2],
     /// The text shown in the hint area.
     pub hint: String,
+    /// The local ShaperBox preset library, loaded on a background thread on first use.
+    pub sb_library: Arc<parking_lot::Mutex<Option<Vec<crate::sb::Preset>>>>,
+    pub sb_loading: bool,
 }
 
 impl Gui {
@@ -122,6 +125,8 @@ impl Gui {
             scratch_drag: None,
             last_status,
             hint: String::new(),
+            sb_library: Arc::new(parking_lot::Mutex::new(None)),
+            sb_loading: false,
         }
     }
 

@@ -84,6 +84,8 @@ pub fn options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Respon
                 ui.close_menu();
             }
             ui.separator();
+            shaperbox_menu(gui, ui);
+            ui.separator();
             let (mut midi, mut click, mut comp, mut dc, mut hq, mut view) = {
                 let m = gui.shared.model.lock();
                 (
@@ -172,6 +174,81 @@ pub fn wheel_menu(gui: &mut Gui, _ui: &mut Ui, setter: &ParamSetter, r: &Respons
                     ui.close_menu();
                 }
             }
+        }
+    });
+}
+
+/// Backspin addition: the ShaperBox section (on or off, presets of the local ShaperBox 3
+/// library, or any preset file).
+fn shaperbox_menu(gui: &mut Gui, ui: &mut Ui) {
+    let (mut enabled, name) = {
+        let m = gui.shared.sb.model.lock();
+        (m.enabled, m.name())
+    };
+    ui.menu_button("ShaperBox", |ui| {
+        ui.set_min_width(220.0);
+        let label = match &name {
+            Some(n) if !n.is_empty() => format!("Enabled ({n})"),
+            _ => "Enabled".to_string(),
+        };
+        if ui.checkbox(&mut enabled, label).changed() {
+            gui.shared.sb.set_enabled(enabled);
+        }
+        if !gui.sb_loading && gui.sb_library.lock().is_none() {
+            gui.sb_loading = true;
+            let lib = gui.sb_library.clone();
+            std::thread::spawn(move || *lib.lock() = Some(crate::sb::library()));
+        }
+        let lib = gui.sb_library.lock().clone();
+        match lib {
+            None => {
+                ui.add_enabled(false, Button::new("Presets (loading...)"));
+            }
+            Some(list) if list.is_empty() => {
+                ui.add_enabled(false, Button::new("Presets (ShaperBox 3 not installed)"));
+            }
+            Some(list) => {
+                ui.menu_button("Presets", |ui| {
+                    // Grouped by first letter: the library holds about 1,500 presets.
+                    let mut groups: Vec<(char, Vec<&crate::sb::Preset>)> = Vec::new();
+                    for p in &list {
+                        let c = p
+                            .name
+                            .chars()
+                            .next()
+                            .map(|c| c.to_ascii_uppercase())
+                            .unwrap_or('#');
+                        let c = if c.is_ascii_alphabetic() { c } else { '#' };
+                        match groups.last_mut() {
+                            Some((k, v)) if *k == c => v.push(p),
+                            _ => groups.push((c, vec![p])),
+                        }
+                    }
+                    for (c, v) in groups {
+                        ui.menu_button(format!("{c}  ({})", v.len()), |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(500.0)
+                                .show(ui, |ui| {
+                                    for p in v {
+                                        if ui.button(&p.name).clicked() {
+                                            let _ = gui.shared.sb.load_file(&p.path);
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
+                        });
+                    }
+                });
+            }
+        }
+        if ui.button("Open ShaperBox preset file...").clicked() {
+            if let Some(p) = rfd::FileDialog::new()
+                .add_filter("ShaperBox preset", &["dat"])
+                .pick_file()
+            {
+                let _ = gui.shared.sb.load_file(&p);
+            }
+            ui.close_menu();
         }
     });
 }

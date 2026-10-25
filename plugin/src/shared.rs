@@ -91,12 +91,15 @@ pub struct Shared {
     commands: Mutex<Producer<Command>>,
     garbage: Mutex<Consumer<Box<Slot>>>,
     pub status: Status,
+    /// The ShaperBox section.
+    pub sb: crate::sb::Shared,
 }
 
 /// The audio thread's ends of the queues.
 pub struct AudioQueues {
     pub commands: Consumer<Command>,
     pub garbage: Producer<Box<Slot>>,
+    pub sb: crate::sb::Audio,
 }
 
 impl Shared {
@@ -104,11 +107,13 @@ impl Shared {
     pub fn new() -> (Self, AudioQueues) {
         let (cp, cc) = RingBuffer::new(COMMANDS);
         let (gp, gc) = RingBuffer::new(COMMANDS);
+        let (sb, sb_audio) = crate::sb::new();
         let shared = Self {
             model: Mutex::new(Engine::new()),
             commands: Mutex::new(cp),
             garbage: Mutex::new(gc),
             status: Status::default(),
+            sb,
         };
         shared.status.publish(&shared.model.lock());
         (
@@ -116,6 +121,7 @@ impl Shared {
             AudioQueues {
                 commands: cc,
                 garbage: gp,
+                sb: sb_audio,
             },
         )
     }

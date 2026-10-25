@@ -19,6 +19,9 @@ pub struct BackspinParams {
     pub state: StateField,
     #[persist = "editor-state"]
     pub editor_state: Arc<EguiState>,
+    /// The ShaperBox section: on or off and its preset (ShaperBox's own state format).
+    #[persist = "shaperbox-state"]
+    pub shaperbox: ShaperBoxField,
 
     #[id = "time_slot"]
     pub time_slot: IntParam,
@@ -60,6 +63,7 @@ impl BackspinParams {
         };
         Self {
             state: StateField(shared.clone()),
+            shaperbox: ShaperBoxField(shared.clone()),
             editor_state: EguiState::from_size(EDITOR_SIZE.0, EDITOR_SIZE.1),
             time_slot: p(0),
             volume_slot: p(1),
@@ -130,5 +134,21 @@ impl<'a> PersistentField<'a, Blob> for StateField {
         F: Fn(&Blob) -> R,
     {
         f(&Blob(self.0.save_state()))
+    }
+}
+
+/// The ShaperBox section as a persisted field.
+pub struct ShaperBoxField(pub Arc<Shared>);
+
+impl<'a> PersistentField<'a, Blob> for ShaperBoxField {
+    fn set(&self, new_value: Blob) {
+        *self.0.sb.model.lock() = crate::sb::Model::from_bytes(&new_value.0);
+    }
+
+    fn map<F, R>(&self, f: F) -> R
+    where
+        F: Fn(&Blob) -> R,
+    {
+        f(&Blob(self.0.sb.model.lock().to_bytes()))
     }
 }

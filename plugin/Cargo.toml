@@ -19,6 +19,7 @@ standalone = ["nih_plug/standalone"]
 
 [dependencies]
 backspin-engine.workspace = true
+backspin-shaperbox.workspace = true
 nih_plug.workspace = true
 nih_plug_egui.workspace = true
 parking_lot.workspace = true

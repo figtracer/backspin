@@ -8,6 +8,7 @@
 mod decode;
 mod editor;
 mod params;
+mod sb;
 mod shared;
 
 use backspin_engine::{
@@ -73,6 +74,16 @@ impl Backspin {
         (beats + offset as f64 * self.tempo / 60.0 / self.sample_rate as f64) * PPQ as f64
     }
 
+    /// Gross Beat's 15 samples, plus the ShaperBox base delay when that section runs.
+    fn latency(&self) -> u32 {
+        LATENCY as u32
+            + if self.queues.sb.processor.is_some() {
+                backspin_shaperbox::graph::BASE_DELAY as u32
+            } else {
+                0
+            }
+    }
+
     /// Applies host parameter changes (FL calls ProcessParam between blocks).
     fn apply_params(&mut self) {
         for (i, p) in self.params.by_index().iter().enumerate() {
@@ -127,8 +138,13 @@ impl Plugin for Backspin {
         buffer_config: &BufferConfig,
         context: &mut impl InitContext<Self>,
     ) -> bool {
-        context.set_latency_samples(LATENCY as u32);
         self.sample_rate = buffer_config.sample_rate;
+        self.shared.sb.sample_rate.store(
+            buffer_config.sample_rate.to_bits(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.queues.sb.processor = self.shared.sb.build();
+        context.set_latency_samples(self.latency());
         let block = buffer_config.max_buffer_size as usize;
         let mut e = Engine::new();
         e.set_song_ticks(0.0);
@@ -237,6 +253,27 @@ impl Plugin for Backspin {
         if start < n {
             self.engine.set_song_ticks(self.ticks(pos, start));
             self.engine.render(&mut self.buf[start..n]);
+        }
+        // The ShaperBox section follows the Gross Beat engine.
+        self.queues.sb.apply();
+        if self
+            .shared
+            .sb
+            .latency_dirty
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            context.set_latency_samples(self.latency());
+        }
+        let beats = self.ticks(pos, 0) / PPQ as f64;
+        if let Some(sbp) = self.queues.sb.processor.as_mut() {
+            sbp.process(
+                &mut self.buf[..n],
+                backspin_shaperbox::graph::Transport {
+                    ppq: beats,
+                    bpm: tempo,
+                    playing,
+                },
+            );
         }
         let slices = buffer.as_slice();
         for (i, f) in self.buf[..n].iter().enumerate() {
