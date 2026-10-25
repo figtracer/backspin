@@ -1,0 +1,13 @@
+[package]
+name = "backspin-ui"
+description = "The Gross Beat editor drawn code-exactly: control layout and the form's painters."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+backspin-gfx.workspace = true
+
+[dev-dependencies]
+png = "0.17"

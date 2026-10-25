@@ -491,6 +491,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "backspin-ui"
+version = "0.1.0"
+dependencies = [
+ "backspin-gfx",
+ "png 0.17.16",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"

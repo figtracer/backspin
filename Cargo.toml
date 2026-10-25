@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/agg2d", "crates/envelope", "crates/dsp", "crates/engine", "crates/gfx", "crates/qfc", "crates/render", "crates/shaperbox", "plugin", "xtask"]
+members = ["crates/agg2d", "crates/envelope", "crates/dsp", "crates/engine", "crates/gfx", "crates/qfc", "crates/render", "crates/shaperbox", "crates/ui", "plugin", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,6 +16,7 @@ backspin-gfx = { path = "crates/gfx" }
 backspin-qfc = { path = "crates/qfc" }
 backspin-envelope = { path = "crates/envelope" }
 backspin-render = { path = "crates/render" }
+backspin-ui = { path = "crates/ui" }
 backspin-shaperbox = { path = "crates/shaperbox" }
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }
 nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }
