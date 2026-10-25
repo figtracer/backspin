@@ -1,0 +1,13 @@
+[package]
+name = "backspin-gfx"
+description = "The Gross Beat editor's drawing code: the TDIB canvas, its raster primitives, gradients and text."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+backspin-agg2d.workspace = true
+
+[dev-dependencies]
+png = "0.17"
