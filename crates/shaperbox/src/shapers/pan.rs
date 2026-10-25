@@ -4,7 +4,7 @@
 use super::Wave;
 use crate::smoother::Smoother;
 
-const SQRT2: f32 = 1.414_213_5;
+const SQRT2: f32 = std::f32::consts::SQRT_2;
 /// `2 * sqrt2 - 4`.
 const C: f32 = -1.343_145_7;
 /// `DAT_01307190 = 2^0.75`.
