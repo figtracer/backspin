@@ -1,0 +1,11 @@
+[package]
+name = "backspin-qfc"
+description = "Image-Line's QuickFontCache text renderer (AGG glyph rasterizer over FreeType 2.10.4), as the Gross Beat editor uses it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+links = "freetype"
+
+[build-dependencies]
+cc = "1"
