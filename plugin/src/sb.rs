@@ -163,25 +163,15 @@ impl Pack {
     }
 }
 
-/// The factory library: "All presets" first, then the packs of `presets.db` in the plugin's
-/// order. Without the database every preset file is read and listed under "All presets" only.
+/// The factory library: "All presets" first (every preset of `presets.db`), then its packs in
+/// the plugin's order. Without the database every preset file is read and listed under
+/// "All presets" only.
 pub fn library() -> Vec<Pack> {
     let Some(home) = std::env::var_os("HOME") else {
         return Vec::new();
     };
     let root = PathBuf::from(home).join("Library/Cableguys/ShaperBox3");
-    let mut packs = from_db(&root).unwrap_or_default();
-    let mut all: Vec<Preset> = if packs.is_empty() {
-        scan(&root)
-    } else {
-        let mut seen = std::collections::HashSet::new();
-        packs
-            .iter()
-            .flat_map(|p| p.presets.iter())
-            .filter(|p| seen.insert(p.path.clone()))
-            .cloned()
-            .collect()
-    };
+    let (mut all, mut packs) = from_db(&root).unwrap_or_else(|| (scan(&root), Vec::new()));
     all.sort_by_cached_key(|p| p.name.to_lowercase());
     packs.insert(
         0,
@@ -193,41 +183,51 @@ pub fn library() -> Vec<Pack> {
     packs
 }
 
-/// The packs of `presets.db`: preset hash `h` is the file `h[0]/h[1]/h.dat`.
-fn from_db(root: &std::path::Path) -> Option<Vec<Pack>> {
+/// Preset hash `h` is the file `h[0]/h[1]/h.dat`, if it is present.
+fn preset_path(root: &std::path::Path, hash: &str) -> Option<PathBuf> {
+    let mut c = hash.chars();
+    let (a, b) = (c.next()?, c.next()?);
+    let path = root
+        .join(a.to_string())
+        .join(b.to_string())
+        .join(format!("{hash}.dat"));
+    path.is_file().then_some(path)
+}
+
+/// Every preset of `presets.db` and its packs.
+fn from_db(root: &std::path::Path) -> Option<(Vec<Preset>, Vec<Pack>)> {
     let db = rusqlite::Connection::open_with_flags(
         root.join("presets.db"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
     .ok()?;
-    let mut q = db
-        .prepare(
-            "select pp.pack, p.hash, p.name from pack_positions pp join presets p \
-             on p.hash = pp.preset order by pp.pack, pp.position",
-        )
-        .ok()?;
-    let rows = q
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
+    let rows = |sql: &str| -> Option<Vec<(String, String, String)>> {
+        let mut q = db.prepare(sql).ok()?;
+        let r = q
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .ok()?
+            .flatten()
+            .collect();
+        Some(r)
+    };
+    let all = rows("select '', hash, name from presets")?
+        .into_iter()
+        .filter_map(|(_, hash, name)| {
+            Some(Preset {
+                name,
+                path: preset_path(root, &hash)?,
+            })
         })
-        .ok()?;
+        .collect();
     let mut packs: Vec<Pack> = Vec::new();
-    for (pack, hash, name) in rows.flatten() {
-        let mut c = hash.chars();
-        let (Some(a), Some(b)) = (c.next(), c.next()) else {
+    let positions = rows(
+        "select pp.pack, p.hash, p.name from pack_positions pp join presets p \
+         on p.hash = pp.preset order by pp.pack, pp.position",
+    )?;
+    for (pack, hash, name) in positions {
+        let Some(path) = preset_path(root, &hash) else {
             continue;
         };
-        let path = root
-            .join(a.to_string())
-            .join(b.to_string())
-            .join(format!("{hash}.dat"));
-        if !path.is_file() {
-            continue;
-        }
         let preset = Preset { name, path };
         match packs.last_mut() {
             Some(p) if p.name == pack => p.presets.push(preset),
@@ -237,7 +237,7 @@ fn from_db(root: &std::path::Path) -> Option<Vec<Pack>> {
             }),
         }
     }
-    Some(packs)
+    Some((all, packs))
 }
 
 /// Every plain preset file under the library folder, with its program name.
@@ -288,5 +288,24 @@ pub fn set_shaper_leaf(tree: &mut Tree, k: usize, id: &str, v: Var) {
                 children: Vec::new(),
             },
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The local library groups the presets into the database's packs (skips without an install).
+    #[test]
+    fn library_reads_packs() {
+        let lib = library();
+        let Some(all) = lib.first() else { return };
+        if all.presets.is_empty() {
+            return;
+        }
+        assert_eq!(all.name, "All presets");
+        assert!(lib.len() > 1, "no packs read from presets.db");
+        assert!(all.presets.iter().any(|p| p.name == "Init"));
+        eprintln!("{} presets in {} packs", all.presets.len(), lib.len() - 1);
     }
 }
