@@ -39,6 +39,7 @@ pub struct Args {
     pub state: Option<String>,
     pub save_state: Option<String>,
     pub params: Vec<(i32, i32)>,
+    pub param_at: Vec<(TimeSpec, i32, i32)>,
     pub notes: Vec<Note>,
     pub process_mode: Option<i32>,
     pub list_params: bool,
@@ -47,7 +48,7 @@ pub struct Args {
 pub const USAGE: &str = "usage: backspin-render [--input in.wav | --gen impulse:PERIOD|sine:HZ|ramp[:PERIOD] --seconds S]
                [--output out.wav] [--dump-input in.wav] [--tempo 120] [--sr 48000] [--block 512]
                [--ppq 96] [--pos BEATS] [--state state.bin|preset.fst] [--param idx=value ...]
-               [--note TIME:NOTE:on|off ...] [--process-mode FLAGS] [--list-params]
+               [--note TIME:NOTE:on|off ...] [--param-at TIME:idx=value ...] [--process-mode FLAGS] [--list-params]
                [--save-state state.bin]
 TIME is samples (\"24000\"), seconds (\"0.5s\") or beats (\"2b\") from the render start.";
 
@@ -68,6 +69,7 @@ impl Args {
             state: None,
             save_state: None,
             params: Vec::new(),
+            param_at: Vec::new(),
             notes: Vec::new(),
             process_mode: None,
             list_params: false,
@@ -94,19 +96,19 @@ impl Args {
                     let (i, x) = v.split_once('=').ok_or("--param wants idx=value")?;
                     a.params.push((num(i)?, num(x)?));
                 }
+                "--param-at" => {
+                    let v = val()?;
+                    let (t, rest) = v.split_once(':').ok_or("--param-at wants TIME:idx=value")?;
+                    let (i, x) = rest.split_once('=').ok_or("--param-at wants TIME:idx=value")?;
+                    a.param_at.push((time_spec(t)?, num(i)?, num(x)?));
+                }
                 "--note" => {
                     let v = val()?;
                     let parts: Vec<&str> = v.split(':').collect();
                     if parts.len() != 3 {
                         return Err("--note wants TIME:NOTE:on|off".into());
                     }
-                    let at = if let Some(s) = parts[0].strip_suffix('s') {
-                        TimeSpec::Seconds(num(s)?)
-                    } else if let Some(b) = parts[0].strip_suffix('b') {
-                        TimeSpec::Beats(num(b)?)
-                    } else {
-                        TimeSpec::Samples(num(parts[0])?)
-                    };
+                    let at = time_spec(parts[0])?;
                     let on = match parts[2] {
                         "on" => true,
                         "off" => false,
@@ -231,31 +233,47 @@ fn list_params(e: &mut Engine) {
     }
 }
 
-/// Renders the buffer in blocks, split at note times, with the notes delivered between blocks.
+/// A render-time event: a MIDI message or a parameter change.
+#[derive(Clone, Copy)]
+enum Event {
+    Midi(u32),
+    Param(i32, i32),
+}
+
+/// Renders the buffer in blocks, split at event times, with the events delivered between blocks.
 fn render(e: &mut Engine, tr: &mut Transport, buf: &mut [[f32; 2]], args: &Args) {
     let frames = buf.len();
     let sr = args.sr as f64;
-    let mut events: Vec<(u64, u32)> = args
+    let mut events: Vec<(u64, Event)> = args
         .notes
         .iter()
         .map(|n| {
-            let at = match n.at {
-                TimeSpec::Samples(s) => s,
-                TimeSpec::Seconds(s) => (s * sr).round() as u64,
-                TimeSpec::Beats(b) => (b * 60.0 / args.tempo * sr).round() as u64,
-            };
+            let at = sample_at(n.at, sr, args.tempo);
             let status = if n.on { 0x90 } else { 0x80 };
             let vel = if n.on { 100 } else { 0 };
-            (at, status | (n.note as u32) << 8 | vel << 16)
+            (at, Event::Midi(status | (n.note as u32) << 8 | vel << 16))
         })
         .collect();
-    events.sort_by_key(|e| e.0);
+    for &(t, index, value) in &args.param_at {
+        events.push((sample_at(t, sr, args.tempo), Event::Param(index, value)));
+    }
+    // Stable: at equal times, notes come before parameters, each in command line order.
+    events.sort_by_key(|e| (e.0, matches!(e.1, Event::Param(..))));
     let mut next_event = 0;
     let mut pos = 0usize;
     while pos < frames {
         while next_event < events.len() && events[next_event].0 as usize <= pos {
+            // The original reads the host song position whenever it needs it, so events see the
+            // position of their own sample.
             e.set_song_ticks(tr.ticks());
-            e.midi_in(events[next_event].1);
+            match events[next_event].1 {
+                Event::Midi(msg) => {
+                    e.midi_in(msg);
+                }
+                Event::Param(index, value) => {
+                    e.process_param(index as usize, value, REC_UPDATE_VALUE | REC_UPDATE_CONTROL);
+                }
+            }
             next_event += 1;
         }
         let mut len = args.block.min(frames - pos);
@@ -306,6 +324,24 @@ pub fn generate(spec: &str, frames: usize, sr: f64) -> Result<Vec<[f32; 2]>, Str
         _ => return Err(format!("unknown generator {kind}")),
     };
     Ok(mono.iter().map(|&v| [v, v]).collect())
+}
+
+fn time_spec(s: &str) -> Result<TimeSpec, String> {
+    Ok(if let Some(v) = s.strip_suffix('s') {
+        TimeSpec::Seconds(num(v)?)
+    } else if let Some(v) = s.strip_suffix('b') {
+        TimeSpec::Beats(num(v)?)
+    } else {
+        TimeSpec::Samples(num(s)?)
+    })
+}
+
+fn sample_at(t: TimeSpec, sr: f64, tempo: f64) -> u64 {
+    match t {
+        TimeSpec::Samples(s) => s,
+        TimeSpec::Seconds(s) => (s * sr).round() as u64,
+        TimeSpec::Beats(b) => (b * 60.0 / tempo * sr).round() as u64,
+    }
 }
 
 fn num<T: std::str::FromStr>(s: &str) -> Result<T, String> {
