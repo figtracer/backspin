@@ -171,9 +171,6 @@ impl Plugin for Backspin {
         if n == 0 {
             return ProcessStatus::Normal;
         }
-        self.queues.apply(&mut self.engine);
-        self.apply_params();
-
         let transport = context.transport();
         let pos = transport.pos_beats();
         let tempo = transport.tempo.unwrap_or(DEFAULT_TEMPO);
@@ -197,6 +194,11 @@ impl Plugin for Backspin {
             }
         }
         self.next_pos = pos.map(|p| p + n as f64 * tempo / 60.0 / self.sample_rate as f64);
+        // ProcessParam reads the song position (the HOLD button schedules from it), so give it the
+        // position of this block.
+        self.engine.set_song_ticks(self.ticks(pos, 0));
+        self.queues.apply(&mut self.engine);
+        self.apply_params();
 
         let channels = buffer.channels();
         {

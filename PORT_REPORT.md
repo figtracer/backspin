@@ -60,6 +60,10 @@ Audio (none on macOS arm64 in the cases above):
   jump while playing is treated as `FPD_SongPosChanged`.
 - The sync table is per instance; the original keeps it in a global (decision 7).
 
+- Slot parameters outside 0..35 (`--param 0=36`, `-1`, `1000`) crash the original in the next render (it
+  indexes the slot table without a bound check); the port renders without crashing. FL never sends these
+  values, so no project can reach them.
+
 State:
 
 - Point byte 13 is written as the original writes it: the sign that Prepare derives for points
@@ -96,6 +100,17 @@ Editor and tools:
   parameter default.
 - The -1..-7 axis tags are drawn on the time group only.
 - The tension drag speed (`DAT_003b1ecc` is runtime data) is 1/200 per pixel.
+
+## Independent check
+
+`.amp/in/check/indep.py` (outside the repository, next to the harness) runs 572 cases written apart from the
+parity matrix: 49 real-world states taken from FL projects (as saved and with random slots, block 97), parameter
+automation inside the render (`--param-at`: slot switching, ramps every 64 samples and random jumps on every
+parameter), out-of-range parameter values, block sizes 1 to 8192, 22.05 and 192 kHz, 20 to 999 BPM, PPQ 24 and
+960, fractional song positions, process mode flags, a 60 s render, hostile inputs (silence, DC, ±10.0, denormals,
+NaN and infinity bursts) and MIDI edge cases. All 572 match bit for bit or, for the 29 out-of-range slot cases,
+crash the original only (above). It found one bug, now fixed: the plugin applied host parameter changes before it
+set the song position of the block, so the HOLD button scheduled its start from the previous block.
 
 ## Open questions
 
