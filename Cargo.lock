@@ -420,7 +420,9 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "backspin-engine",
+ "backspin-gfx",
  "backspin-shaperbox",
+ "backspin-ui",
  "image",
  "nih_plug",
  "nih_plug_egui",

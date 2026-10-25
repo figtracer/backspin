@@ -358,10 +358,10 @@ pub fn paint(dib: &mut Dib, m: &Model, text: &mut dyn Text) {
     control(dib, tg, |d, w, h| slot_grid(d, w, h, m, 0, text));
     control(dib, vg, |d, w, h| slot_grid(d, w, h, m, 1, text));
     control(dib, rect(610, 512, 104, 19), |d, w, h| {
-        combo(d, w, h, "TRIG SYNC:", "4 beats", text)
+        combo(d, w, h, "TRIG SYNC:", &m.combos[1], text)
     });
     control(dib, rect(718, 512, 106, 19), |d, w, h| {
-        combo(d, w, h, "POS SYNC:", "4 beats", text)
+        combo(d, w, h, "POS SYNC:", &m.combos[2], text)
     });
     if m.group == 0 {
         control(dib, rect(457, 512, 22, 24), |d, w, h| {
@@ -375,6 +375,6 @@ pub fn paint(dib: &mut Dib, m: &Model, text: &mut dyn Text) {
         h_button(d, w, h, "1", m.one_shot, text)
     });
     control(dib, rect(530, 512, 76, 19), |d, w, h| {
-        combo(d, w, h, "HOLD:", "Off", text)
+        combo(d, w, h, "HOLD:", &m.combos[0], text)
     });
 }

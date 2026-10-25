@@ -5,6 +5,7 @@
 
 mod dialogs;
 mod envelope;
+mod frame;
 mod menus;
 mod paint;
 
@@ -14,8 +15,7 @@ use backspin_engine::envelope::tools::ToolError;
 use backspin_engine::{Engine, PARAMS, param_text};
 use nih_plug::prelude::{Editor, ParamSetter};
 use nih_plug_egui::egui::{
-    self, Align2, Color32, Context, Id, PointerButton, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2,
-    vec2,
+    self, Align2, Color32, Context, Id, PointerButton, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2,
 };
 use nih_plug_egui::{EguiState, create_egui_editor};
 use paint::*;
@@ -24,7 +24,6 @@ use std::sync::atomic::Ordering;
 
 /// The SnapSel divisions (0x34c948): index 0 is off with a 1/4-beat grid.
 pub const SNAP_DIV: [i32; 7] = [4, 16, 12, 8, 6, 4, 3];
-pub const SNAP_LABELS: [&str; 7] = ["X", "1/16", "1/12", "1/8", "1/6", "1/4", "1/3"];
 pub const SNAP_HINTS: [&str; 7] = [
     "off",
     "1/16 beat",
@@ -91,6 +90,8 @@ pub struct Gui {
     /// The local ShaperBox preset library, loaded on a background thread on first use.
     pub sb_library: Arc<parking_lot::Mutex<Option<Vec<crate::sb::Preset>>>>,
     pub sb_loading: bool,
+    /// The texture of the code-exact frame.
+    frame_tex: Option<egui::TextureHandle>,
 }
 
 impl Gui {
@@ -127,6 +128,7 @@ impl Gui {
             hint: String::new(),
             sb_library: Arc::new(parking_lot::Mutex::new(None)),
             sb_loading: false,
+            frame_tex: None,
         }
     }
 
@@ -219,6 +221,9 @@ impl Gui {
             .show(ctx, |ui| {
                 let full = ui.max_rect();
                 let (w, h) = (full.width(), full.height());
+                let mut tex = self.frame_tex.take();
+                frame::show(self, ui, &mut tex);
+                self.frame_tex = tex;
                 self.left_column(ui, setter, h);
                 if !self.compact {
                     self.side_buttons(ui, setter, h);
@@ -262,16 +267,7 @@ impl Gui {
     /// The left column: header, knobs, HOLD, the scratch clock and the two slot grids.
     fn left_column(&mut self, ui: &mut Ui, setter: &ParamSetter, h: f32) {
         let p = ui.painter().clone();
-        let view_scratch = self.shared.model.lock().view_scratch != 0;
-        let clock = view_scratch;
-        // SlotsBevel, then the header art over it.
-        p.rect_filled(
-            Rect::from_min_max(pos2(0.0, 62.0), pos2(COLUMN, h - 63.0)),
-            0.0,
-            BEVEL,
-        );
-        header_art(&p, clock);
-        bottom_art(&p, h - 63.0);
+        let clock = self.shared.model.lock().view_scratch != 0;
 
         // Time and volume mix knobs.
         self.knob(
@@ -621,80 +617,13 @@ impl Gui {
             }
         }
         menus::wheel_menu(self, ui, setter, &resp, bank);
-
-        // Paint (TimeSlotSelPaint 0x66bb0).
-        let p = ui.painter();
-        let group = self.group();
-        let m = self.shared.model.lock();
-        let status = &self.shared.status;
-        let playing = status.playing.load(Ordering::Relaxed);
-        let active = status.active[bank].load(Ordering::Relaxed);
-        let pos = status.position(bank);
-        let gc = group_color(bank);
-        let ppb = (r.width() - cols as f32 - 1.0) / (cols as f32 * 4.0);
-        for i in 0..36 {
-            let cr = Rect::from_min_size(
-                pos2(
-                    r.min.x + (i % cols) as f32 * cw,
-                    r.min.y + (i / cols) as f32 * ch,
-                ),
-                vec2(cw, ch),
-            )
-            .shrink(0.5);
-            let slot = &m.banks[bank].slots[i];
-            let empty = slot.empty && slot.name.is_empty();
-            let base = rgb(0x2b3a45);
-            p.rect_filled(cr, 1.0, alpha(base, if empty { 153 } else { 230 }));
-            let is_playing = playing && active == i as i32;
-            if is_playing {
-                let bar = Rect::from_min_size(
-                    cr.min,
-                    vec2((pos as f32 * ppb).clamp(0.0, cr.width()), cr.height()),
-                );
-                p.rect_filled(bar, 0.0, alpha(group_fill(bank), 0x3c));
-            }
-            let is_selected = selected == i as i32;
-            let is_edited = self.edited[bank] == i && group == bank;
-            if is_selected || is_edited {
-                p.rect_stroke(
-                    cr,
-                    1.0,
-                    Stroke::new(1.0f32, alpha(gc, 0x50)),
-                    egui::StrokeKind::Inside,
-                );
-            }
-            let color = if is_edited {
-                rgb(0xf0ff0a)
-            } else if is_playing || is_selected {
-                lighten(gc, 0x18)
-            } else if slot.empty {
-                rgb(0x485762)
-            } else {
-                rgb(0xd0dfea)
-            };
-            let text = slot.display_name(i);
-            let tr = Rect::from_min_max(
-                pos2(cr.min.x + 3.0, cr.min.y),
-                pos2(cr.max.x - 2.0, cr.max.y),
-            );
-            p.with_clip_rect(tr).text(
-                pos2(tr.min.x, tr.center().y),
-                Align2::LEFT_CENTER,
-                text,
-                font(9.5),
-                color,
-            );
-        }
     }
 
     /// The column between the slots and the envelope: menu, snap, step, slide, freeze, map type.
     fn side_buttons(&mut self, ui: &mut Ui, setter: &ParamSetter, h: f32) {
-        let p = ui.painter().clone();
         // MenuBtn: the envelope options menu.
         let mr = Rect::from_min_size(pos2(270.0, 4.0), vec2(23.0, 27.0));
         let r = ui.interact(mr, Id::new("menu_btn"), Sense::click());
-        side_cell(&p, mr, false);
-        glyph(&p, mr.shrink(5.0), Glyph::Menu, SIDE_ON_TEXT);
         if r.hovered() {
             self.hint = "Options".into();
         }
@@ -708,43 +637,22 @@ impl Gui {
         {
             self.snap = (((pt.y - sr.min.y) / 27.0) as usize).min(6);
         }
-        for i in 0..7 {
+        for (i, hint) in SNAP_HINTS.iter().enumerate() {
             let cr = Rect::from_min_size(pos2(270.0, 40.0 + i as f32 * 27.0), vec2(23.0, 27.0));
-            let on = self.snap == i;
-            side_cell(&p, cr, on);
-            p.text(
-                cr.center() - vec2(0.0, 1.0),
-                Align2::CENTER_CENTER,
-                SNAP_LABELS[i],
-                font(9.0),
-                if on { SIDE_ON_TEXT } else { SIDE_OFF_TEXT },
-            );
             if ui.rect_contains_pointer(cr) {
-                self.hint = format!("Snap: {}", SNAP_HINTS[i]);
+                self.hint = format!("Snap: {hint}");
             }
         }
 
         // Step, Slide, Freeze toggles.
         let toggles = [
-            (
-                275.0,
-                Glyph::Step,
-                "Step editing (hold shift for pulse mode)",
-            ),
-            (301.0, Glyph::Slide, "Slide remaining points"),
-            (327.0, Glyph::Freeze, "Freeze editing"),
+            (275.0, "Step editing (hold shift for pulse mode)"),
+            (301.0, "Slide remaining points"),
+            (327.0, "Freeze editing"),
         ];
-        for (k, (y, g, hint)) in toggles.into_iter().enumerate() {
+        for (k, (y, hint)) in toggles.into_iter().enumerate() {
             let tr = Rect::from_min_size(pos2(270.0, y), vec2(23.0, 27.0));
             let r = ui.interact(tr, Id::new(("vbtn", k)), Sense::click());
-            let on = [self.step, self.slide, self.freeze][k];
-            side_cell(&p, tr, on);
-            glyph(
-                &p,
-                tr.shrink(5.0),
-                g,
-                if on { SIDE_ON_TEXT } else { SIDE_OFF_TEXT },
-            );
             if r.clicked() {
                 match k {
                     0 => self.step = !self.step,
@@ -759,23 +667,9 @@ impl Gui {
 
         // MapTypeSel: time travel / volume.
         let _ = h;
-        let group = self.group();
         for k in 0..2 {
             let cr = Rect::from_min_size(pos2(270.0, 470.0 + k as f32 * 26.0), vec2(23.0, 26.0));
             let r = ui.interact(cr, Id::new(("maptype", k)), Sense::click());
-            let on = group == k;
-            side_cell(&p, cr, on);
-            let col = if on { rgb(0x94db66) } else { SIDE_OFF_TEXT };
-            glyph(
-                &p,
-                cr.shrink(5.0),
-                if k == 0 {
-                    Glyph::TimeMap
-                } else {
-                    Glyph::VolumeMap
-                },
-                col,
-            );
             if r.clicked() {
                 self.set_group(k);
                 let _ = setter;
@@ -819,41 +713,26 @@ impl Gui {
 
         // Link (time group only), key-held and one-shot toggles.
         let buttons = [
-            (
-                457.0,
-                Glyph::Link,
-                "Link volume slot",
-                slot.link != 0,
-                group == 0,
-            ),
+            (457.0, "Link volume slot", slot.link != 0, group == 0),
             (
                 480.0,
-                Glyph::KeyHeld,
                 "Key-held  (back to previous slot on key release)",
                 slot.key_held != 0,
                 true,
             ),
             (
                 503.0,
-                Glyph::OneShot,
                 "One-shot (back to first slot once done)",
                 slot.one_shot != 0,
                 true,
             ),
         ];
-        for (k, (x, g, hint, on, visible)) in buttons.into_iter().enumerate() {
+        for (k, (x, hint, on, visible)) in buttons.into_iter().enumerate() {
             if !visible {
                 continue;
             }
             let br = Rect::from_min_size(pos2(x, y + 2.0), vec2(22.0, 22.0));
             let r = ui.interact(br, Id::new(("hbtn", k)), Sense::click());
-            h_button(&p, br, on);
-            glyph(
-                &p,
-                br.shrink(4.0),
-                g,
-                if on { SIDE_ON_TEXT } else { SIDE_OFF_TEXT },
-            );
             if r.hovered() {
                 self.hint = hint.into();
             }
@@ -877,7 +756,6 @@ impl Gui {
             (
                 530.0,
                 76.0,
-                "HOLD:",
                 &HOLD_ITEMS[..],
                 slot.force_hold,
                 "Force hold delay (bar repeat)",
@@ -885,7 +763,6 @@ impl Gui {
             (
                 610.0,
                 104.0,
-                "TRIG SYNC:",
                 &SYNC_ITEMS[..],
                 slot.trigger_sync,
                 "Slot trigger synchronization",
@@ -893,37 +770,14 @@ impl Gui {
             (
                 718.0,
                 106.0,
-                "POS SYNC:",
                 &SYNC_ITEMS[..],
                 slot.position_sync,
                 "Slot position synchronization",
             ),
         ];
-        for (k, (x, w, label, items, value, hint)) in combos.into_iter().enumerate() {
+        for (k, (x, w, items, value, hint)) in combos.into_iter().enumerate() {
             let cr = Rect::from_min_size(pos2(x, y + 2.0), vec2(w, 19.0));
             let r = ui.interact(cr, Id::new(("combo", k)), Sense::click());
-            h_button(&p, Rect::from_min_size(cr.min, vec2(w - 18.0, 19.0)), true);
-            p.text(
-                pos2(cr.min.x + 4.0, cr.center().y),
-                Align2::LEFT_CENTER,
-                label,
-                font(9.5),
-                SIDE_ON_TEXT,
-            );
-            let item = items.get(value.max(0) as usize).copied().unwrap_or("?");
-            p.text(
-                pos2(cr.min.x + w * 0.5, cr.center().y),
-                Align2::LEFT_CENTER,
-                item,
-                font(10.0),
-                COMBO_TEXT,
-            );
-            glyph(
-                &p,
-                Rect::from_min_size(pos2(cr.max.x - 16.0, cr.min.y + 2.0), vec2(14.0, 14.0)),
-                Glyph::Down,
-                SIDE_ON_TEXT,
-            );
             if r.hovered() {
                 self.hint = hint.into();
             }
@@ -996,115 +850,6 @@ pub fn slot_hint(m: &Engine, bank: usize, i: usize) -> String {
 }
 
 /// The header art (TopBgPaintBoxPaint 0x6266c): a gradient shape with a notch for the scratch
-/// clock, and the "time" pill.
-fn header_art(p: &egui::Painter, clock: bool) {
-    let top = rgb(0xaeb6bc);
-    let bottom = rgb(0x363e44);
-    gradient_rect(
-        p,
-        Rect::from_min_max(pos2(0.0, 0.0), pos2(COLUMN, 53.0)),
-        top,
-        mix(top, bottom, 53.0 / 90.0),
-    );
-    let mid = mix(top, bottom, 57.0 / 90.0);
-    p.add(Shape::convex_polygon(
-        vec![
-            pos2(0.0, 53.0),
-            pos2(60.0, 53.0),
-            pos2(39.0, 61.0),
-            pos2(0.0, 61.0),
-        ],
-        mid,
-        Stroke::NONE,
-    ));
-    let cx = 186.0;
-    if clock {
-        gradient_rect(
-            p,
-            Rect::from_min_max(pos2(cx - 5.0, 53.0), pos2(COLUMN, 90.0)),
-            mix(top, bottom, 53.0 / 90.0),
-            bottom,
-        );
-    }
-    let edge = rgb(0x403a32);
-    let mut outline = vec![pos2(0.0, 61.0), pos2(39.0, 61.0), pos2(60.0, 53.0)];
-    if clock {
-        outline.extend([
-            pos2(cx - 10.0, 53.0),
-            pos2(cx - 5.0, 58.0),
-            pos2(cx - 5.0, 85.0),
-            pos2(cx, 90.0),
-            pos2(COLUMN, 90.0),
-        ]);
-    } else {
-        outline.push(pos2(COLUMN, 53.0));
-    }
-    p.add(Shape::line(outline, Stroke::new(1.0f32, edge)));
-    let pr = Rect::from_min_max(pos2(36.0, 14.0), pos2(133.0, 45.0));
-    pill(p, pr, PILL);
-    // TopBgPaintBoxPaint: "time" centred in (36, 14, 124, 44), flags 0x1a.
-    p.text(
-        pos2(80.0, 29.0),
-        Align2::CENTER_CENTER,
-        "time",
-        font(15.0),
-        rgb(0xa1f46d),
-    );
-    glyph(
-        p,
-        Rect::from_min_size(pos2(106.0, 18.0), vec2(22.0, 22.0)),
-        Glyph::Clock,
-        rgb(0xa1f46d),
-    );
-}
-
-/// The bottom art (BottomBgPaintBoxPaint 0x634e0) with the "volume" pill, at `y`.
-fn bottom_art(p: &egui::Painter, y: f32) {
-    let top = rgb(0x7d858b);
-    let bottom = rgb(0x363e44);
-    p.add(Shape::convex_polygon(
-        vec![
-            pos2(0.0, y),
-            pos2(38.0, y),
-            pos2(58.0, y + 8.0),
-            pos2(0.0, y + 8.0),
-        ],
-        top,
-        Stroke::NONE,
-    ));
-    gradient_rect(
-        p,
-        Rect::from_min_max(pos2(0.0, y + 8.0), pos2(COLUMN, y + 63.0)),
-        top,
-        bottom,
-    );
-    p.add(Shape::line(
-        vec![
-            pos2(0.0, y),
-            pos2(38.0, y),
-            pos2(58.0, y + 8.0),
-            pos2(COLUMN, y + 8.0),
-        ],
-        Stroke::new(1.0f32, rgb(0x403a32)),
-    ));
-    let pr = Rect::from_min_max(pos2(36.0, y + 18.0), pos2(133.0, y + 48.0));
-    pill(p, pr, PILL);
-    // BottomBgPaintBoxPaint: "volume" centred in (36, 21, 124, 47), flags 0x1a.
-    p.text(
-        pos2(80.0, y + 34.0),
-        Align2::CENTER_CENTER,
-        "volume",
-        font(15.0),
-        VOLUME,
-    );
-    glyph(
-        p,
-        Rect::from_min_size(pos2(106.0, y + 22.0), vec2(22.0, 22.0)),
-        Glyph::Speaker,
-        VOLUME,
-    );
-}
-
 /// Shows a tool refusal (the original's message box).
 pub fn refusal(gui: &mut Gui, e: ToolError) {
     gui.dialogs.message = Some(e);

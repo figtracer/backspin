@@ -4,7 +4,7 @@
 //! drawn after the thumbnail (SPEC.md decision 14). Positions, sizes and colours come from ui.md.
 
 use nih_plug_egui::egui::{
-    Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, epaint::PathShape, pos2, vec2,
+    Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2,
 };
 use std::f32::consts::{PI, TAU};
 
@@ -36,19 +36,12 @@ pub fn mix(c: Color32, to: Color32, t: f32) -> Color32 {
 }
 
 pub const PANEL: Color32 = rgb(0x344b5b);
-pub const BEVEL: Color32 = rgb(0x171f24);
-pub const PILL: Color32 = rgb(0x2c353a);
 pub const TIME: Color32 = rgb(0xa8ff70);
 pub const VOLUME: Color32 = rgb(0xffb870);
-pub const TIME_FILL: Color32 = rgb(0x99e669);
 pub const TIME_MIX: Color32 = rgb(0x86bf69);
 pub const KNOB_RAIL: Color32 = rgb(0x3f484d);
 pub const KNOB_PRESSED: Color32 = rgb(0xced0d1);
-pub const SIDE_STROKE: Color32 = rgb(0x25313b);
-pub const SIDE_ON_TEXT: Color32 = rgb(0xb0bdc6);
-pub const SIDE_OFF_TEXT: Color32 = rgb(0x1a232a);
 pub const LABEL: Color32 = rgb(0xb9c5c4);
-pub const COMBO_TEXT: Color32 = rgb(0xc4d0d7);
 pub const ORANGE: Color32 = rgb(0xff9637);
 pub const HOLD_ON: Color32 = rgb(0x83e32b);
 pub const HOLD_TEXT: Color32 = rgb(0x9fa8ad);
@@ -57,11 +50,6 @@ pub const SELECT_RING: Color32 = rgb(0xa8e44a);
 /// The colour of a group (bank): time green, volume orange.
 pub fn group_color(bank: usize) -> Color32 {
     if bank == 0 { TIME } else { VOLUME }
-}
-
-/// The fill colour of a group (progress bars).
-pub fn group_fill(bank: usize) -> Color32 {
-    if bank == 0 { TIME_FILL } else { VOLUME }
 }
 
 pub fn font(size: f32) -> FontId {
@@ -227,48 +215,6 @@ pub fn glyph(p: &Painter, r: Rect, g: Glyph, c: Color32) {
     }
 }
 
-/// The side cell shape (FUN_00065c00): a chamfered tab with its top at `y`.
-pub fn side_cell(p: &Painter, r: Rect, on: bool) {
-    let (x, y) = (r.min.x, r.min.y);
-    let h = r.height();
-    let w = r.width();
-    let pts = vec![
-        pos2(x + 1.0, y + h),
-        pos2(x + 1.0, y + 7.0),
-        pos2(x + 4.0, y + 4.0),
-        pos2(x + w - 4.0, y + 4.0),
-        pos2(x + w - 1.0, y + 1.0),
-        pos2(x + w - 1.0, y + h - 8.0),
-        pos2(x + w - 4.0, y + h - 5.0),
-        pos2(x + 3.0, y + h - 5.0),
-    ];
-    let fill = if on { SIDE_STROKE } else { PANEL };
-    p.add(Shape::Path(PathShape::convex_polygon(
-        pts,
-        fill,
-        Stroke::new(2.0f32, SIDE_STROKE),
-    )));
-}
-
-/// The H button shape (FUN_000661a0): a chamfered rectangle.
-pub fn h_button(p: &Painter, r: Rect, on: bool) {
-    let (x, y, w, h) = (r.min.x, r.min.y, r.width(), r.height());
-    let pts = vec![
-        pos2(x + 1.0, y + h - 1.0),
-        pos2(x + 1.0, y + 4.0),
-        pos2(x + 4.0, y + 1.0),
-        pos2(x + w - 1.0, y + 1.0),
-        pos2(x + w - 1.0, y + h - 4.0),
-        pos2(x + w - 4.0, y + h - 1.0),
-    ];
-    let fill = if on { SIDE_STROKE } else { PANEL };
-    p.add(Shape::Path(PathShape::convex_polygon(
-        pts,
-        fill,
-        Stroke::new(2.0f32, SIDE_STROKE),
-    )));
-}
-
 /// A TVectorWheel knob. `t` is the normalized value (0..1), `centered` draws from the middle.
 /// `gap_right` puts the rail gap at the right (the mix knobs), else at the bottom.
 pub fn knob(
@@ -379,15 +325,4 @@ pub fn gradient_rect(p: &Painter, r: Rect, top: Color32, bottom: Color32) {
         );
         p.rect_filled(band, 0.0, mix(top, bottom, (t0 + t1) * 0.5));
     }
-}
-
-/// A rounded "pill" (the group tags): rect with a round right end.
-pub fn pill(p: &Painter, r: Rect, fill: Color32) {
-    let rad = r.height() * 0.5;
-    p.rect_filled(
-        Rect::from_min_max(r.min, pos2(r.max.x - rad, r.max.y)),
-        0.0,
-        fill,
-    );
-    p.circle_filled(pos2(r.max.x - rad, r.center().y), rad, fill);
 }

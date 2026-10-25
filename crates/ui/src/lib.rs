@@ -84,6 +84,8 @@ pub struct Model {
     pub one_shot: bool,
     /// The scratch clock is visible (option "View scratching clock").
     pub clock: bool,
+    /// The combo values of the edited slot: HOLD, TRIG SYNC, POS SYNC.
+    pub combos: [String; 3],
 }
 
 impl Default for Model {
@@ -104,6 +106,7 @@ impl Default for Model {
             key_held: false,
             one_shot: false,
             clock: true,
+            combos: ["Off".into(), "4 beats".into(), "4 beats".into()],
         }
     }
 }
