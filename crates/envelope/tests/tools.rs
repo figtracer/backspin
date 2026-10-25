@@ -4,6 +4,9 @@
 //! `.amp/in/re/data/envtools_model.py` with the tools it lacks. Every point must match bit for
 //! bit: position, value, tension, shape and selection.
 
+// The tool table wraps the infallible tools in `Ok`.
+#![allow(clippy::unit_arg)]
+
 use backspin_envelope::tools::{
     FilterSettings, ScaleSettings, SeqSettings, SeqStep, SmoothSettings, parse_value,
 };

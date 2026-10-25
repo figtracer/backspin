@@ -4,13 +4,16 @@ use super::dialogs::{self, ToolKind};
 use super::paint::*;
 use super::{Gui, refusal};
 use crate::shared::Command;
-use backspin_engine::envelope::tools::{parse_value, value_text};
+use backspin_engine::envelope::tools::{ToolError, parse_value, value_text};
 use backspin_engine::envelope::{Envelope, SHAPE_MENU};
 use backspin_engine::{PARAMS, fst_state};
 use nih_plug::prelude::ParamSetter;
 use nih_plug_egui::egui::{self, Button, Id, Pos2, Rect, Response, RichText, Ui, pos2};
 use std::path::PathBuf;
 use std::sync::Mutex;
+
+/// A deferred edit of the slot's envelope.
+type Edit = Box<dyn FnOnce(&mut Envelope) -> Result<(), ToolError>>;
 
 /// The FL install folder of Gross Beat (state presets, maps and artwork; SPEC.md decision 15).
 pub const GB_DIR: &str =
@@ -363,14 +366,7 @@ pub fn env_options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Re
                 .clone();
             let sel = env.selected_count();
             let cont = env.selection_continuous();
-            let mut edit: Option<
-                Box<
-                    dyn FnOnce(
-                        &mut Envelope,
-                    )
-                        -> Result<(), backspin_engine::envelope::tools::ToolError>,
-                >,
-            > = None;
+            let mut edit: Option<Edit> = None;
             let mut close = false;
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
