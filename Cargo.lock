@@ -459,6 +459,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "backspin-shaperbox"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide 0.8.9",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"

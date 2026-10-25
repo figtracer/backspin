@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/envelope", "crates/dsp", "crates/engine", "crates/render", "plugin", "xtask"]
+members = ["crates/envelope", "crates/dsp", "crates/engine", "crates/render", "crates/shaperbox", "plugin", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,7 @@ backspin-dsp = { path = "crates/dsp" }
 backspin-engine = { path = "crates/engine" }
 backspin-envelope = { path = "crates/envelope" }
 backspin-render = { path = "crates/render" }
+backspin-shaperbox = { path = "crates/shaperbox" }
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }
 nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }
 nih_plug_xtask = { git = "https://github.com/robbert-vdh/nih-plug", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }
