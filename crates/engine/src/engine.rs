@@ -375,7 +375,12 @@ impl Engine {
         while i != to {
             let j = if to > i { i + 1 } else { i - 1 };
             b.slots.swap(i, j);
-            for v in [&mut b.active, &mut b.selected, &mut b.edited, &mut b.pending] {
+            for v in [
+                &mut b.active,
+                &mut b.selected,
+                &mut b.edited,
+                &mut b.pending,
+            ] {
                 if *v == i as i32 {
                     *v = j as i32;
                 } else if *v == j as i32 {

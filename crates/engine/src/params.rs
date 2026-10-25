@@ -102,7 +102,10 @@ pub fn param_text(index: usize, value: i32, slot_name: impl Fn(usize, usize) -> 
         5 => format!("{:.2}ms", smoothing_ms(value) * 2.0),
         8 => format!(
             "-{}",
-            time_text(-((value as f32 * (1.0 / 65536.0) - 1.0) as f64) * 8.0, false)
+            time_text(
+                -((value as f32 * (1.0 / 65536.0) - 1.0) as f64) * 8.0,
+                false
+            )
         ),
         _ => String::new(),
     }

@@ -99,7 +99,9 @@ impl Args {
                 "--param-at" => {
                     let v = val()?;
                     let (t, rest) = v.split_once(':').ok_or("--param-at wants TIME:idx=value")?;
-                    let (i, x) = rest.split_once('=').ok_or("--param-at wants TIME:idx=value")?;
+                    let (i, x) = rest
+                        .split_once('=')
+                        .ok_or("--param-at wants TIME:idx=value")?;
                     a.param_at.push((time_spec(t)?, num(i)?, num(x)?));
                 }
                 "--note" => {
