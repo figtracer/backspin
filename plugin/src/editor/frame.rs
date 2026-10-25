@@ -6,7 +6,7 @@
 use super::paint::{Glyph, font, glyph};
 use super::{Gui, HOLD_ITEMS, SYNC_ITEMS};
 use backspin_gfx::{Dib, Rect as DRect};
-use backspin_ui::{Font, HEIGHT, Model, PANEL, Text, WIDTH, paint};
+use backspin_ui::{Font, HEIGHT, Model, PANEL, SB_HEIGHT, Text, WIDTH, paint, paint_sb};
 use nih_plug_egui::egui::{
     self, Align2, Color32, ColorImage, Painter, Rect, TextureHandle, TextureOptions, pos2, vec2,
 };
@@ -111,6 +111,10 @@ fn il_glyph(text: &str) -> Option<Glyph> {
         "\u{f05f}" => Glyph::Down,
         "\u{f463}" => Glyph::Clock,
         "\u{f0b8}" => Glyph::Speaker,
+        backspin_ui::sb::GLYPH_WAVE => Glyph::Wave,
+        backspin_ui::sb::GLYPH_PREV => Glyph::Prev,
+        backspin_ui::sb::GLYPH_NEXT => Glyph::Next,
+        backspin_ui::sb::GLYPH_POWER => Glyph::Power,
         _ => return None,
     })
 }
@@ -176,22 +180,29 @@ fn draw_item(p: &Painter, it: &Item) {
 
 /// Paints the frame and the text overlay (every egui frame; the bitmap is rebuilt each time).
 pub fn show(gui: &mut Gui, ui: &egui::Ui, tex: &mut Option<TextureHandle>) {
-    let mut dib = Dib::new(WIDTH, HEIGHT, PANEL);
+    let mut dib = Dib::new(WIDTH, HEIGHT + SB_HEIGHT, PANEL);
     let mut overlay = Overlay::default();
     paint(&mut dib, &model(gui), &mut overlay);
+    dib.move_origin(0, HEIGHT);
+    paint_sb(&mut dib, &super::sb_section::model(gui), &mut overlay);
+    dib.move_origin(0, -HEIGHT);
     let rgba: Vec<u8> = dib
         .pixels()
         .iter()
         .flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8, 0xff])
         .collect();
-    let image = ColorImage::from_rgba_unmultiplied([WIDTH as usize, HEIGHT as usize], &rgba);
+    let image =
+        ColorImage::from_rgba_unmultiplied([WIDTH as usize, (HEIGHT + SB_HEIGHT) as usize], &rgba);
     let t = tex.get_or_insert_with(|| {
         ui.ctx()
             .load_texture("backspin-frame", image.clone(), TextureOptions::NEAREST)
     });
     t.set(image, TextureOptions::NEAREST);
     let p = ui.painter();
-    let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(WIDTH as f32, HEIGHT as f32));
+    let full = Rect::from_min_size(
+        pos2(0.0, 0.0),
+        vec2(WIDTH as f32, (HEIGHT + SB_HEIGHT) as f32),
+    );
     p.image(
         t.id(),
         full,

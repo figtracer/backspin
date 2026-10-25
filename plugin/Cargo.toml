@@ -28,6 +28,7 @@ parking_lot.workspace = true
 rtrb = "0.3"
 arboard = { version = "3", default-features = false }
 png = "0.17"
+rusqlite = { version = "0.32", features = ["bundled"] }
 rfd = "0.15"
 symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "aiff", "flac", "mp3", "ogg", "vorbis"] }
 serde.workspace = true

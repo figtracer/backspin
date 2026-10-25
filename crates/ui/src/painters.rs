@@ -8,12 +8,12 @@ use backspin_gfx::{Dib, DrawPath, PI, Rect, gradient_lut, s};
 
 const SC: f64 = 1.0;
 
-fn sd(n: f64) -> f64 {
+pub(crate) fn sd(n: f64) -> f64 {
     s(n, SC) as f64
 }
 
 /// `FUN_00148200`: paints a graphic control in its own coordinates, clipped to its rect.
-fn control(dib: &mut Dib, r: Rect, f: impl FnOnce(&mut Dib, i32, i32)) {
+pub(crate) fn control(dib: &mut Dib, r: Rect, f: impl FnOnce(&mut Dib, i32, i32)) {
     let old = dib.clip();
     dib.move_origin(r.x0, r.y0);
     let (w, h) = (r.x1 - r.x0, r.y1 - r.y0);
@@ -24,7 +24,7 @@ fn control(dib: &mut Dib, r: Rect, f: impl FnOnce(&mut Dib, i32, i32)) {
     dib.set_clip(old);
 }
 
-const fn rect(x: i32, y: i32, w: i32, h: i32) -> Rect {
+pub(crate) const fn rect(x: i32, y: i32, w: i32, h: i32) -> Rect {
     Rect::new(x, y, x + w, y + h)
 }
 
@@ -123,7 +123,7 @@ fn bottom_bg(dib: &mut Dib, w: i32, text: &mut dyn Text) {
 }
 
 /// `FUN_00065c00(form, ctrl, y, on)`: the chamfered side tab.
-fn side_tab(dib: &mut Dib, y: f64, on: bool) {
+pub(crate) fn side_tab(dib: &mut Dib, y: f64, on: bool) {
     let a = dib.agg();
     a.reset_path();
     a.line_width(sd(2.0));
@@ -146,7 +146,7 @@ fn side_tab(dib: &mut Dib, y: f64, on: bool) {
 }
 
 /// `FUN_000661a0(form, ctrl, w, on)`: the chamfered bottom tab.
-fn bottom_tab(dib: &mut Dib, w: i32, on: bool) {
+pub(crate) fn bottom_tab(dib: &mut Dib, w: i32, on: bool) {
     let a = dib.agg();
     a.reset_path();
     a.line_width(sd(2.0));
@@ -167,10 +167,17 @@ fn bottom_tab(dib: &mut Dib, w: i32, on: bool) {
     a.draw_path(DrawPath::FillAndStroke);
 }
 
-const TOGGLE: [u32; 2] = [0x1a232a, 0xb0bdc6];
+pub(crate) const TOGGLE: [u32; 2] = [0x1a232a, 0xb0bdc6];
 
 /// EnvVBtnPaint (0x66600): the side toggle and its glyph.
-fn v_button(dib: &mut Dib, w: i32, h: i32, glyph: &str, down: bool, text: &mut dyn Text) {
+pub(crate) fn v_button(
+    dib: &mut Dib,
+    w: i32,
+    h: i32,
+    glyph: &str,
+    down: bool,
+    text: &mut dyn Text,
+) {
     side_tab(dib, 0.0, down);
     text.draw(
         dib,
@@ -184,7 +191,14 @@ fn v_button(dib: &mut Dib, w: i32, h: i32, glyph: &str, down: bool, text: &mut d
 }
 
 /// EnvHBtnPaint (0x666f0): the bottom toggle and its glyph.
-fn h_button(dib: &mut Dib, w: i32, h: i32, glyph: &str, down: bool, text: &mut dyn Text) {
+pub(crate) fn h_button(
+    dib: &mut Dib,
+    w: i32,
+    h: i32,
+    glyph: &str,
+    down: bool,
+    text: &mut dyn Text,
+) {
     bottom_tab(dib, 0, down);
     text.draw(
         dib,
@@ -264,7 +278,21 @@ fn slot_grid(dib: &mut Dib, w: i32, h: i32, m: &Model, g: usize, text: &mut dyn 
 }
 
 /// The combo boxes (ForceHoldSelPaint 0x617a0).
-fn combo(dib: &mut Dib, w: i32, h: i32, label: &str, value: &str, text: &mut dyn Text) {
+pub(crate) fn combo(dib: &mut Dib, w: i32, h: i32, label: &str, value: &str, text: &mut dyn Text) {
+    let v = Rect::new((w as f64 * 0.5) as i32, s(1.0, SC), w, h);
+    combo_at(dib, w, h, label, value, v, text);
+}
+
+/// The combo with its value in `v` (the ShaperBox section's narrow-label combos).
+pub(crate) fn combo_at(
+    dib: &mut Dib,
+    w: i32,
+    h: i32,
+    label: &str,
+    value: &str,
+    v: Rect,
+    text: &mut dyn Text,
+) {
     bottom_tab(dib, w - s(18.0, SC), true);
     text.draw(
         dib,
@@ -275,15 +303,7 @@ fn combo(dib: &mut Dib, w: i32, h: i32, label: &str, value: &str, text: &mut dyn
         0xb0bdc6,
         0x110,
     );
-    text.draw(
-        dib,
-        Font::ComboValue,
-        value,
-        Rect::new((w as f64 * 0.5) as i32, s(1.0, SC), w, h),
-        0x18,
-        0xc4d0d7,
-        0x110,
-    );
+    text.draw(dib, Font::ComboValue, value, v, 0x18, 0xc4d0d7, 0x110);
     text.draw(
         dib,
         Font::ButtonGlyph,

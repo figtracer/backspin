@@ -3,8 +3,10 @@
 //! goes through a [`Text`] renderer (the QuickFontCache port).
 
 mod painters;
+pub mod sb;
 
 pub use painters::paint;
+pub use sb::{SB_HEIGHT, SbModel, ShaperCell, paint_sb};
 
 use backspin_gfx::{Dib, Rect};
 

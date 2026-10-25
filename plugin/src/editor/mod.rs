@@ -8,6 +8,7 @@ mod envelope;
 mod frame;
 mod menus;
 mod paint;
+mod sb_section;
 
 use crate::params::{BackspinParams, EDITOR_SIZE};
 use crate::shared::{Command, Shared};
@@ -88,8 +89,16 @@ pub struct Gui {
     /// The text shown in the hint area.
     pub hint: String,
     /// The local ShaperBox preset library, loaded on a background thread on first use.
-    pub sb_library: Arc<parking_lot::Mutex<Option<Vec<crate::sb::Preset>>>>,
+    pub sb_library: Arc<parking_lot::Mutex<Option<Vec<crate::sb::Pack>>>>,
     pub sb_loading: bool,
+    /// The ShaperBox section: the pack shown, the loaded preset file, the selected shaper and
+    /// band.
+    pub sb_pack: usize,
+    pub sb_preset: Option<std::path::PathBuf>,
+    pub sb_selected: usize,
+    pub sb_band: usize,
+    /// The last Gross Beat preset loaded from the header.
+    pub gb_preset: String,
     /// The texture of the code-exact frame.
     frame_tex: Option<egui::TextureHandle>,
 }
@@ -128,8 +137,29 @@ impl Gui {
             hint: String::new(),
             sb_library: Arc::new(parking_lot::Mutex::new(None)),
             sb_loading: false,
+            sb_pack: 0,
+            sb_preset: None,
+            sb_selected: 5,
+            sb_band: 1,
+            gb_preset: "(current)".into(),
             frame_tex: None,
         }
+    }
+
+    /// Selects shaper `k` in the ShaperBox section and shows the band its split selects.
+    pub fn select_shaper(&mut self, k: usize) {
+        self.sb_selected = k;
+        let m = self.shared.sb.model.lock();
+        self.sb_band = m
+            .tree
+            .as_ref()
+            .map(|t| {
+                let sp = backspin_shaperbox::state::State::from_tree(t).shapers[k].split;
+                let active = [sp.low > 0.0, true, sp.high < 1.0];
+                let b = sp.selected.clamp(0, 2) as usize;
+                if active[b] { b } else { 1 }
+            })
+            .unwrap_or(1);
     }
 
     /// The current group (time 0 / volume 1): the model's editor view bank.
@@ -220,11 +250,13 @@ impl Gui {
             .frame(egui::Frame::NONE.fill(PANEL))
             .show(ctx, |ui| {
                 let full = ui.max_rect();
-                let (w, h) = (full.width(), full.height());
+                // The Gross Beat form keeps its own height; the ShaperBox section sits below.
+                let (w, h) = (full.width(), backspin_ui::HEIGHT as f32);
                 let mut tex = self.frame_tex.take();
                 frame::show(self, ui, &mut tex);
                 self.frame_tex = tex;
                 self.left_column(ui, setter, h);
+                sb_section::show(self, ui, setter);
                 if !self.compact {
                     self.side_buttons(ui, setter, h);
                     let r = Rect::from_min_size(pos2(298.0, 5.0), vec2(w - 304.0, h - 34.0));

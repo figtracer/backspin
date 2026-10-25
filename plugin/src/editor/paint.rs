@@ -87,6 +87,13 @@ pub enum Glyph {
     Clock,
     /// U+F0B8: the volume pill.
     Speaker,
+    /// The ShaperBox pill (Backspin).
+    Wave,
+    /// Previous and next preset (Backspin).
+    Prev,
+    Next,
+    /// The ShaperBox on/off toggles (Backspin).
+    Power,
 }
 
 /// Draws a glyph centred in `r`.
@@ -211,6 +218,39 @@ pub fn glyph(p: &Painter, r: Rect, g: Glyph, c: Color32) {
             p.circle_stroke(ctr, 0.55 * w, s);
             p.line_segment([ctr, ctr + vec2(0.0, -0.35 * w)], s);
             p.line_segment([ctr, ctr + vec2(0.3 * w, 0.0)], s);
+        }
+        Glyph::Wave => {
+            let v: Vec<Pos2> = (0..=16)
+                .map(|i| {
+                    let t = i as f32 / 16.0;
+                    pos2(
+                        ctr.x + (t - 0.5) * 1.4 * w,
+                        ctr.y - (t * TAU).sin() * 0.45 * w,
+                    )
+                })
+                .collect();
+            p.add(Shape::line(v, s));
+        }
+        Glyph::Prev | Glyph::Next => {
+            let d = if matches!(g, Glyph::Prev) { -1.0 } else { 1.0 };
+            p.add(Shape::line(
+                vec![
+                    pos2(ctr.x - d * 0.25 * w, ctr.y - 0.45 * w),
+                    pos2(ctr.x + d * 0.25 * w, ctr.y),
+                    pos2(ctr.x - d * 0.25 * w, ctr.y + 0.45 * w),
+                ],
+                s,
+            ));
+        }
+        Glyph::Power => {
+            let pts: Vec<Pos2> = (0..=20)
+                .map(|i| {
+                    let a = -PI * 0.5 + 0.35 * PI + i as f32 / 20.0 * 1.3 * PI;
+                    ctr + vec2(a.cos(), a.sin()) * 0.5 * w
+                })
+                .collect();
+            p.add(Shape::line(pts, s));
+            p.line_segment([ctr + vec2(0.0, -0.65 * w), ctr + vec2(0.0, -0.1 * w)], s);
         }
     }
 }

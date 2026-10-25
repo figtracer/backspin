@@ -3,7 +3,7 @@
 
 use backspin_shaperbox::graph::Processor;
 use backspin_shaperbox::state::State;
-use backspin_shaperbox::{Tree, read_preset, write_preset};
+use backspin_shaperbox::{Tree, Var, read_preset, write_preset};
 use parking_lot::Mutex;
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::path::PathBuf;
@@ -38,11 +38,6 @@ impl Model {
 
     pub fn state(&self) -> State {
         self.tree.as_ref().map(State::from_tree).unwrap_or_default()
-    }
-
-    /// The preset name, if a state is loaded.
-    pub fn name(&self) -> Option<String> {
-        self.tree.as_ref().map(|t| State::from_tree(t).name)
     }
 }
 
@@ -120,6 +115,20 @@ impl Shared {
         self.model.lock().enabled = on;
         self.push();
     }
+
+    /// Turns shaper `k` on or off (on also makes it visible: the plugin processes visible shapers
+    /// only).
+    pub fn set_shaper(&self, k: usize, on: bool) {
+        {
+            let mut m = self.model.lock();
+            let Some(t) = m.tree.as_mut() else { return };
+            set_shaper_leaf(t, k, "on", Var::Bool(on));
+            if on {
+                set_shaper_leaf(t, k, "VISIBLE", Var::Bool(true));
+            }
+        }
+        self.push();
+    }
 }
 
 impl Audio {
@@ -140,14 +149,101 @@ pub struct Preset {
     pub path: PathBuf,
 }
 
-/// The factory library: every plain preset file with its program name, sorted by name.
-pub fn library() -> Vec<Preset> {
+/// A pack of the library (`Category@Pack` in the plugin's database).
+#[derive(Clone, Debug)]
+pub struct Pack {
+    pub name: String,
+    pub presets: Vec<Preset>,
+}
+
+impl Pack {
+    /// The short name: the part after the category.
+    pub fn short(&self) -> &str {
+        self.name.rsplit('@').next().unwrap_or(&self.name)
+    }
+}
+
+/// The factory library: "All presets" first, then the packs of `presets.db` in the plugin's
+/// order. Without the database every preset file is read and listed under "All presets" only.
+pub fn library() -> Vec<Pack> {
     let Some(home) = std::env::var_os("HOME") else {
         return Vec::new();
     };
     let root = PathBuf::from(home).join("Library/Cableguys/ShaperBox3");
+    let mut packs = from_db(&root).unwrap_or_default();
+    let mut all: Vec<Preset> = if packs.is_empty() {
+        scan(&root)
+    } else {
+        let mut seen = std::collections::HashSet::new();
+        packs
+            .iter()
+            .flat_map(|p| p.presets.iter())
+            .filter(|p| seen.insert(p.path.clone()))
+            .cloned()
+            .collect()
+    };
+    all.sort_by_cached_key(|p| p.name.to_lowercase());
+    packs.insert(
+        0,
+        Pack {
+            name: "All presets".into(),
+            presets: all,
+        },
+    );
+    packs
+}
+
+/// The packs of `presets.db`: preset hash `h` is the file `h[0]/h[1]/h.dat`.
+fn from_db(root: &std::path::Path) -> Option<Vec<Pack>> {
+    let db = rusqlite::Connection::open_with_flags(
+        root.join("presets.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .ok()?;
+    let mut q = db
+        .prepare(
+            "select pp.pack, p.hash, p.name from pack_positions pp join presets p \
+             on p.hash = pp.preset order by pp.pack, pp.position",
+        )
+        .ok()?;
+    let rows = q
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .ok()?;
+    let mut packs: Vec<Pack> = Vec::new();
+    for (pack, hash, name) in rows.flatten() {
+        let mut c = hash.chars();
+        let (Some(a), Some(b)) = (c.next(), c.next()) else {
+            continue;
+        };
+        let path = root
+            .join(a.to_string())
+            .join(b.to_string())
+            .join(format!("{hash}.dat"));
+        if !path.is_file() {
+            continue;
+        }
+        let preset = Preset { name, path };
+        match packs.last_mut() {
+            Some(p) if p.name == pack => p.presets.push(preset),
+            _ => packs.push(Pack {
+                name: pack,
+                presets: vec![preset],
+            }),
+        }
+    }
+    Some(packs)
+}
+
+/// Every plain preset file under the library folder, with its program name.
+fn scan(root: &std::path::Path) -> Vec<Preset> {
     let mut out = Vec::new();
-    for a in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+    for a in std::fs::read_dir(root).into_iter().flatten().flatten() {
         for b in std::fs::read_dir(a.path()).into_iter().flatten().flatten() {
             for f in std::fs::read_dir(b.path()).into_iter().flatten().flatten() {
                 let path = f.path();
@@ -168,6 +264,29 @@ pub fn library() -> Vec<Preset> {
             }
         }
     }
-    out.sort_by_cached_key(|p| p.name.to_lowercase());
     out
+}
+
+/// Sets the `<type id=.. value=..>` leaf `id` of the shaper `k` in a state tree, adding it after
+/// the shaper's other leaves when missing.
+pub fn set_shaper_leaf(tree: &mut Tree, k: usize, id: &str, v: Var) {
+    let name = backspin_shaperbox::state::SHAPER_IDS[k];
+    let is = |t: &Tree, s: &str| matches!(t.prop("id"), Some(Var::String(x)) if x == s);
+    let Some(sh) = tree.children.iter_mut().find(|c| is(c, name)) else {
+        return;
+    };
+    match sh.children.iter_mut().find(|c| is(c, id)) {
+        Some(leaf) => match leaf.props.iter_mut().find(|(k, _)| k == "value") {
+            Some((_, old)) => *old = v,
+            None => leaf.props.push(("value".into(), v)),
+        },
+        None => sh.children.insert(
+            0,
+            Tree {
+                kind: "bool".into(),
+                props: vec![("id".into(), Var::String(id.into())), ("value".into(), v)],
+                children: Vec::new(),
+            },
+        ),
+    }
 }

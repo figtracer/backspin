@@ -8,8 +8,12 @@ use nih_plug_egui::EguiState;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::sync::Arc;
 
-/// The editor size at 100 %: the form of the harness capture (830 x 535).
-pub const EDITOR_SIZE: (u32, u32) = (backspin_ui::WIDTH as u32, backspin_ui::HEIGHT as u32);
+/// The editor size at 100 %: the form of the harness capture (830 x 535) and the ShaperBox
+/// section under it.
+pub const EDITOR_SIZE: (u32, u32) = (
+    backspin_ui::WIDTH as u32,
+    (backspin_ui::HEIGHT + backspin_ui::SB_HEIGHT) as u32,
+);
 
 /// The nine parameters with their raw integer ranges, and the persisted state blob.
 #[derive(Params)]
