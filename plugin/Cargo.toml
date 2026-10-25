@@ -9,10 +9,25 @@ publish.workspace = true
 [lib]
 crate-type = ["cdylib", "lib"]
 
+[[bin]]
+name = "backspin-standalone"
+path = "src/main.rs"
+required-features = ["standalone"]
+
+[features]
+standalone = ["nih_plug/standalone"]
+
 [dependencies]
 backspin-engine.workspace = true
 nih_plug.workspace = true
 nih_plug_egui.workspace = true
 parking_lot.workspace = true
 rtrb = "0.3"
+arboard = { version = "3", default-features = false }
+png = "0.17"
+rfd = "0.15"
+symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "aiff", "flac", "mp3", "ogg", "vorbis"] }
 serde.workspace = true
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }

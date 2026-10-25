@@ -142,7 +142,7 @@ impl Engine {
 
     /// The steps after a state load: re-apply every parameter, show the selected slots, refresh
     /// the taps and click constants, and re-activate the banks if the transport plays.
-    pub(crate) fn finish_load(&mut self) {
+    fn finish_load(&mut self) {
         for i in 0..NUM_PARAMS {
             let value = self.process_param(i, 0, REC_GET_VALUE);
             self.process_param(i, value, REC_UPDATE_VALUE | REC_UPDATE_CONTROL);

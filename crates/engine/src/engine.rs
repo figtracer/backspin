@@ -367,29 +367,28 @@ impl Engine {
         std::mem::swap(&mut self.banks[bank].slots[index], slot);
     }
 
-    /// Takes the saved part of `other` (parameters, options, slots) as a state load does, and
-    /// leaves the replaced data in `other`. Nothing is allocated.
-    pub fn swap_state(&mut self, other: &mut Engine) {
-        self.params = other.params;
-        self.view_bank = other.view_bank;
-        [
-            self.remove_dc,
-            self.attack_comp,
-            self.hq,
-            self.view_scratch,
-            self.click,
-        ] = [
-            other.remove_dc,
-            other.attack_comp,
-            other.hq,
-            other.view_scratch,
-            other.click,
-        ];
-        self.midi_trigger = other.midi_trigger;
-        for b in 0..2 {
-            std::mem::swap(&mut self.banks[b].slots, &mut other.banks[b].slots);
+    /// Moves a slot from `from` to `to` by successive swaps of neighbours (0x6c3e0). The active,
+    /// selected, edited and pending indexes follow the slots they point at.
+    pub fn move_slot(&mut self, bank: usize, from: usize, to: usize) {
+        let b = &mut self.banks[bank];
+        let mut i = from;
+        while i != to {
+            let j = if to > i { i + 1 } else { i - 1 };
+            b.slots.swap(i, j);
+            for v in [&mut b.active, &mut b.selected, &mut b.edited, &mut b.pending] {
+                if *v == i as i32 {
+                    *v = j as i32;
+                } else if *v == j as i32 {
+                    *v = i as i32;
+                }
+            }
+            if b.active_slot == i {
+                b.active_slot = j;
+            } else if b.active_slot == j {
+                b.active_slot = i;
+            }
+            i = j;
         }
-        self.finish_load();
     }
 
     /// ProcessParam (0x68f70). Returns the value.
@@ -608,7 +607,7 @@ impl Engine {
 
     /// Re-activates both banks at their selected slots (0x6c9d0), on play and song position
     /// changes.
-    pub(crate) fn reactivate(&mut self) {
+    pub fn reactivate(&mut self) {
         if self.holding {
             self.r.pos = self.hold_saved;
         }

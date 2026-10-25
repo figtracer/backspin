@@ -15,12 +15,18 @@ const COMMANDS: usize = 512;
 
 /// A change from the editor to the audio engine.
 pub enum Command {
-    /// Replace one slot.
+    /// Replace one slot. With `rearm`, a playing engine re-activates both banks, as the slot
+    /// settings handler does when force hold or one-shot changes (PosSyncSelChange 0x65690).
     Slot {
         bank: usize,
         index: usize,
         slot: Box<Slot>,
+        rearm: bool,
     },
+    /// Move a slot by successive swaps (0x6c3e0).
+    MoveSlot { bank: usize, from: usize, to: usize },
+    /// Clear a bank's key-held stack (the slot grid mouse-up handler).
+    ClearKeyStack(usize),
     /// The CenterMenuClick options: Remove DC, attack compensation, HQ, click reduction.
     Options {
         remove_dc: u8,
@@ -30,14 +36,6 @@ pub enum Command {
     },
     /// "Trigger slots from MIDI notes".
     MidiTrigger(u8),
-    /// A whole state (preset load, paste): parameters, options and slots.
-    State(Box<Engine>),
-}
-
-/// Data the audio thread hands back for dropping.
-pub enum Garbage {
-    Slot(Box<Slot>),
-    State(Box<Engine>),
 }
 
 /// What the editor shows of the playing engine.
@@ -91,14 +89,14 @@ pub struct Shared {
     /// The model engine: the state the host saves and the editor edits.
     pub model: Mutex<Engine>,
     commands: Mutex<Producer<Command>>,
-    garbage: Mutex<Consumer<Garbage>>,
+    garbage: Mutex<Consumer<Box<Slot>>>,
     pub status: Status,
 }
 
 /// The audio thread's ends of the queues.
 pub struct AudioQueues {
     pub commands: Consumer<Command>,
-    pub garbage: Producer<Garbage>,
+    pub garbage: Producer<Box<Slot>>,
 }
 
 impl Shared {
@@ -136,14 +134,9 @@ impl Shared {
     }
 
     /// Sends the model's slot to the audio thread.
-    pub fn send_slot(&self, model: &Engine, bank: usize, index: usize) {
+    pub fn send_slot(&self, model: &Engine, bank: usize, index: usize, rearm: bool) {
         let slot = Box::new(model.banks[bank].slots[index].clone());
-        self.send(Command::Slot { bank, index, slot });
-    }
-
-    /// Sends the whole model to the audio thread.
-    pub fn send_state(&self, model: &Engine) {
-        self.send(Command::State(Box::new(model.clone())));
+        self.send(Command::Slot { bank, index, slot, rearm });
     }
 
     /// The saved state of the model, with the parameters the audio engine plays.
@@ -165,9 +158,21 @@ impl AudioQueues {
                     bank,
                     index,
                     mut slot,
+                    rearm,
                 } => {
                     engine.swap_slot(bank, index, &mut slot);
-                    Some(Garbage::Slot(slot))
+                    if rearm && engine.playing() {
+                        engine.reactivate();
+                    }
+                    Some(slot)
+                }
+                Command::MoveSlot { bank, from, to } => {
+                    engine.move_slot(bank, from, to);
+                    None
+                }
+                Command::ClearKeyStack(bank) => {
+                    engine.banks[bank].key_stack.clear();
+                    None
                 }
                 Command::Options {
                     remove_dc,
@@ -181,10 +186,6 @@ impl AudioQueues {
                 Command::MidiTrigger(on) => {
                     engine.midi_trigger = on;
                     None
-                }
-                Command::State(mut state) => {
-                    engine.swap_state(&mut state);
-                    Some(Garbage::State(state))
                 }
             };
             if let Some(g) = old {

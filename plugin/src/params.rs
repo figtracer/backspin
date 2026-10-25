@@ -8,8 +8,8 @@ use nih_plug_egui::EguiState;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::sync::Arc;
 
-/// The editor size at 100 % (ui.md section 1).
-pub const EDITOR_SIZE: (u32, u32) = (824, 535);
+/// The editor size at 100 %: the canonical 824 x 560 of ui.md 2.1.
+pub const EDITOR_SIZE: (u32, u32) = (824, 560);
 
 /// The nine parameters with their raw integer ranges, and the persisted state blob.
 #[derive(Params)]

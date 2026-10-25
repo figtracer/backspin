@@ -84,8 +84,17 @@ impl Envelope {
     /// stays as it is. A version of 4 or more is read but nothing else is. Points that already
     /// exist keep their derived bytes, as `SetLength` keeps them in the original.
     pub fn load(&mut self, r: &mut Reader<'_>) {
+        self.load_with(r, false);
+    }
+
+    /// Loads a record of any kind (the "bypass" load of 0x239070 for `.fnv` files and presets).
+    pub fn load_any(&mut self, data: &[u8]) {
+        self.load_with(&mut Reader::new(data), true);
+    }
+
+    fn load_with(&mut self, r: &mut Reader<'_>, bypass: bool) {
         let kind = r.i32(i32::MAX);
-        if kind != KIND_MAP {
+        if kind != KIND_MAP && !bypass {
             return;
         }
         let version = r.i32(i32::MAX);

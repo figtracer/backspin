@@ -102,26 +102,23 @@ pub fn param_text(index: usize, value: i32, slot_name: impl Fn(usize, usize) -> 
         5 => format!("{:.2}ms", smoothing_ms(value) * 2.0),
         8 => format!(
             "-{}",
-            beats_text(-((value as f32 * (1.0 / 65536.0) - 1.0) as f64) * 8.0)
+            time_text(-((value as f32 * (1.0 / 65536.0) - 1.0) as f64) * 8.0, false)
         ),
         _ => String::new(),
     }
 }
 
-/// FL's "BBB:SS:TTT" position text in 4/4 with 4 steps per beat and 24 ticks per step, as the
-/// scratch hint shows it (0xa96d0 with the 1-based flag off).
-pub fn beats_text(beats: f64) -> String {
-    let (steps_per_bar, ticks_per_step) = (16.0, 24.0);
-    let bars = (beats.abs() / 4.0) as i64;
-    let steps = (beats - bars as f64 * 4.0) * (steps_per_bar / 4.0);
-    let whole = steps.abs() as i64;
-    let ticks = ((steps - whole as f64) * ticks_per_step).round_ties_even() as i64;
-    let text = format!("{bars:03}:{whole:02}:{ticks:03}");
-    if beats < 0.0 {
-        format!("-{text}")
-    } else {
-        text
-    }
+/// The editor's time text (FUN_000a96d0) in 4/4 with 96 ticks per beat: `BBB:BB:TTT` as
+/// bars, beats and ticks, 1-based when `one_based`, with a leading `-` for negative values.
+pub fn time_text(x: f64, one_based: bool) -> String {
+    let (beats_per_bar, ticks_per_beat) = (4.0, 96.0);
+    let bars = (x.abs() / beats_per_bar) as i64;
+    let rem = x - bars as f64 * beats_per_bar;
+    let beats = rem.abs() as i64;
+    let ticks = ((rem - beats as f64) * ticks_per_beat).round_ties_even() as i64;
+    let k = one_based as i64;
+    let text = format!("{:03}:{:02}:{:03}", bars + k, beats + k, ticks);
+    if x < 0.0 { format!("-{text}") } else { text }
 }
 
 fn round_half_away(x: f64) -> i64 {

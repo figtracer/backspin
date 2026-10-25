@@ -20,5 +20,5 @@ pub use engine::{
     Engine, LATENCY, PM_HQ_NON_REALTIME, PM_IS_RENDERING, REC_FROM_MIDI, REC_GET_VALUE,
     REC_UPDATE_CONTROL, REC_UPDATE_VALUE,
 };
-pub use params::{NUM_PARAMS, PARAMS, ParamInfo, param_text};
+pub use params::{NUM_PARAMS, PARAMS, ParamInfo, param_text, time_text};
 pub use state::{STATE_VERSION, StateError, fst_state};

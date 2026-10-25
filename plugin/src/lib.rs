@@ -5,6 +5,7 @@
 //! `PM_HQ_NonRealtime` (decision 5), and the transport drives play, stop and song position changes
 //! (decision 6). The plugin reports 15 samples of latency.
 
+mod decode;
 mod editor;
 mod params;
 mod shared;
