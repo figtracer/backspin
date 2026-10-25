@@ -365,10 +365,15 @@ impl Smoothing {
     }
 
     /// Smooths one block in place. `ramping` is false when the block holds one constant value.
-    pub fn process(&mut self, buf: &mut [f32], ramping: bool) {
-        let Some(&x0) = buf.first() else { return };
-        if !ramping && (self.y2 - x0).abs() < 0.0001 && !self.first {
-            return;
+    /// Returns whether the output is a per-sample buffer: the filter skips a constant input
+    /// within 1e-4 of its output (the output state starts at 0, so a constant non-zero wave is
+    /// filtered, and flagged as a buffer, in its first block).
+    pub fn process(&mut self, buf: &mut [f32], ramping: bool) -> bool {
+        let Some(&x0) = buf.first() else {
+            return ramping;
+        };
+        if !ramping && (self.y2 - x0).abs() < 0.0001 {
+            return false;
         }
         if self.first {
             self.first = false;
@@ -388,5 +393,6 @@ impl Smoothing {
             self.x_prev = x;
             *v = y2;
         }
+        true
     }
 }
