@@ -11,3 +11,4 @@ miniz_oxide = "0.8"
 
 [dev-dependencies]
 miniz_oxide = "0.8"
+serde_json.workspace = true
