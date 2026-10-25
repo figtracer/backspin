@@ -12,7 +12,7 @@ const LN1024: f64 = 6.931_471_805_599_453;
 const WMAX: f64 = 1.570_482_167_529_537_5;
 
 fn clamp01(x: f32) -> f32 {
-    if !(0.0 <= x) {
+    if x.is_nan() || x < 0.0 {
         0.0
     } else if x <= 1.0 {
         x
@@ -142,7 +142,7 @@ impl Comb {
             size *= 2;
         }
         let t = (100.0 / sr).min(0.4999);
-        let t = ((t * 3.141_592_7) as f64).tan() as f32;
+        let t = ((t * std::f32::consts::PI) as f64).tan() as f32;
         let t = t.max(0.0);
         Self {
             buf: [vec![0.0; size], vec![0.0; size]],
@@ -181,6 +181,7 @@ impl LiquidBand {
     }
 
     /// `type_with_bypass` 0 off, 1 flanger, 2 phaser; `stages` 0..3 = 4, 8, 12, 16.
+    #[allow(clippy::too_many_arguments)]
     pub fn process(
         &mut self,
         buf: &mut [[f32; 2]],
