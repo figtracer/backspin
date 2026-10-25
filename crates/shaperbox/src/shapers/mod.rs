@@ -1,6 +1,7 @@
 //! Per-band shaper DSP (shapers_a.md, shapers_b.md). Every band processor takes stereo audio and
 //! the band's wave `w[i]` in [0, 1] (0.5 is the wave's centre line, 1 the top).
 
+pub mod liquid;
 pub mod pan;
 pub mod time;
 pub mod volume;

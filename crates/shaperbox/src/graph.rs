@@ -4,7 +4,9 @@
 
 use crate::bandsplit::{Bands, Bandsplit, multiband_sum};
 use crate::ftz::FlushToZero;
-use crate::shapers::{Wave as Port, dry_wet, pan::PanBand, time::TimeBand, volume, width};
+use crate::shapers::{
+    Wave as Port, dry_wet, liquid::LiquidBand, pan::PanBand, time::TimeBand, volume, width,
+};
 use crate::smoother::Smoother;
 use crate::state::{Band, Lfo, State};
 use crate::wave::{Smoothing, Wave, length_beats, rate_hz, smoothing_coef};
@@ -97,6 +99,8 @@ struct BandRt {
     gain: Smoother,
     haas_mix: Smoother,
     pan: Option<PanBand>,
+    liquid: Option<LiquidBand>,
+    stereo_offset: Smoother,
     time: Option<Box<TimeBand>>,
     dry: Vec<[f32; 2]>,
 }
@@ -112,6 +116,8 @@ impl BandRt {
             gain: Smoother::new(band.float("gain", 0.5), sr as f64, 0.0),
             haas_mix: Smoother::new(band.float("haasMix", 0.0), sr as f64, 0.0),
             pan: (shaper == 3).then(|| PanBand::new(sr)),
+            liquid: (shaper == 11).then(|| LiquidBand::new(sr)),
+            stereo_offset: Smoother::new(band.float("stereoOffset", 0.5), sr as f64, 0.0),
             time: (shaper == 0).then(|| Box::new(TimeBand::new(sr))),
             dry: Vec::with_capacity(BLOCK),
         }
@@ -247,6 +253,29 @@ impl Processor {
                             volume::process(audio, port, &brt.gain);
                         }
                         7 => width::process(audio, port, band.float("gain", 0.5)),
+                        11 => {
+                            brt.stereo_offset
+                                .process(band.float("stereoOffset", 0.5), n);
+                            let sec = |id: &str| {
+                                band.sections
+                                    .iter()
+                                    .position(|s| s.id == id)
+                                    .map(|k| brt.lfos[k].port())
+                                    .unwrap_or(Port::Constant(0.5))
+                            };
+                            let (center, feedback) = (sec("center"), sec("feedback"));
+                            if let Some(lq) = brt.liquid.as_mut() {
+                                lq.process(
+                                    audio,
+                                    center,
+                                    feedback,
+                                    band.int("typeWithBypass", 1),
+                                    band.int("mode", 0),
+                                    band.int("phaserStages", 2),
+                                    &brt.stereo_offset,
+                                );
+                            }
+                        }
                         _ => {}
                     }
                     let m = band.mix;
