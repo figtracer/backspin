@@ -125,6 +125,7 @@ impl Crossover {
         self.rbj = [[Biquad::default(); 2]; 2];
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn process(&mut self, buf: &mut [[f32; 2]], p: f32, slope: i32, sr: f32) {
         if self.last_slope != Some(slope) {
             self.reset();
@@ -212,6 +213,7 @@ impl Bandsplit {
     }
 
     /// Splits `x` into `out` with the band split state values.
+    #[allow(clippy::too_many_arguments)]
     pub fn process(
         &mut self,
         x: &[[f32; 2]],

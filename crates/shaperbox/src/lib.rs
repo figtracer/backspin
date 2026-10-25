@@ -6,5 +6,6 @@ pub mod ftz;
 pub mod shapers;
 pub mod smoother;
 pub mod valuetree;
+pub mod wave;
 
 pub use valuetree::{Tree, Var, read_preset, write_preset};
