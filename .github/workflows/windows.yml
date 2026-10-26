@@ -1,0 +1,31 @@
+name: windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --workspace --exclude xtask
+      - name: Bundle
+        run: cargo xtask bundle backspin --release
+      - name: Installer
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DVersion=$version" "/DBundled=$PWD\target\bundled" "/DOutput=$PWD\target\dist" scripts\backspin.iss
+          Compress-Archive -Path target\bundled\Backspin.vst3, target\bundled\Backspin.clap -DestinationPath "target\dist\Backspin-$version-windows-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backspin-windows-x64
+          path: target/dist/*
