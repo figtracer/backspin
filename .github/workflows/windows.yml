@@ -15,9 +15,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test
-        # The bit-exact tests compare with vectors made on macOS: Apple's libm and the MSVC CRT
-        # round some exp/ln/sin/cos results differently, so report but do not block for now.
-        continue-on-error: true
         run: cargo test --workspace --exclude xtask --no-fail-fast
       - name: Bundle
         run: cargo xtask bundle backspin --release

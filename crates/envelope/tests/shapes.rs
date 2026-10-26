@@ -40,10 +40,13 @@ fn shapes_match_the_formulas() {
             );
             env.points[1].eval(x)
         };
-        assert_eq!(
-            got.to_bits(),
-            want.to_bits(),
-            "{kind} t={t} x={x}: {got} != {want}"
+        // Bit for bit with the vectors (made on macOS) where the platform libm is Apple's; other
+        // libms round some exp/ln/sin/cos results differently by an ulp.
+        let ulps = got.to_bits().abs_diff(want.to_bits());
+        let allowed = if cfg!(target_os = "macos") { 0 } else { 4 };
+        assert!(
+            ulps <= allowed,
+            "{kind} t={t} x={x}: {got} != {want} ({ulps} ulps)"
         );
         n += 1;
     }
