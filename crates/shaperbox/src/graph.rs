@@ -5,7 +5,14 @@
 use crate::bandsplit::{Bands, Bandsplit, multiband_sum};
 use crate::ftz::FlushToZero;
 use crate::shapers::{
-    Wave as Port, dry_wet, liquid::LiquidBand, noise::NoiseBand, pan::PanBand, time::TimeBand,
+    Wave as Port,
+    crush::{CrushBand, CrushParams},
+    drive::{DriveBand, DriveParams, internal_style},
+    dry_wet,
+    liquid::LiquidBand,
+    noise::NoiseBand,
+    pan::PanBand,
+    time::{Steps, TimeBand},
     volume, width,
 };
 use crate::smoother::Smoother;
@@ -36,6 +43,10 @@ struct LfoRt {
     wave: Wave,
     smoothing: Smoothing,
     phase: f64,
+    /// The phase at the start of the last rendered block.
+    phase0: f64,
+    /// The rate in Hz of the last rendered block.
+    rate: f64,
     buf: Vec<f32>,
     ramping: bool,
 }
@@ -47,6 +58,8 @@ impl LfoRt {
             smoothing: Smoothing::new(smoothing_coef(lfo.smoothing, sr)),
             lfo: lfo.clone(),
             phase: 0.0,
+            phase0: 0.0,
+            rate: 0.0,
             buf: Vec::with_capacity(BLOCK),
             ramping: false,
         }
@@ -66,6 +79,8 @@ impl LfoRt {
             let p = t.ppq / beats;
             self.phase = p - p.floor();
         }
+        self.phase0 = self.phase;
+        self.rate = rate;
         self.buf.clear();
         if let Some(c) = self.wave.constant {
             self.buf.resize(n, c * 0.5 + 0.5);
@@ -85,6 +100,18 @@ impl LfoRt {
         }
     }
 
+    /// The step-crossfade input of the Time shaper (shapers_a.md 5.3): on for a moving wave with
+    /// steps unless the LFO is one-shot outside Note timing.
+    fn steps(&self) -> Option<Steps<'_>> {
+        let on = self.lfo.timing_mode == 2 || self.lfo.trigger_mode != 2;
+        (on && self.wave.constant.is_none() && !self.wave.steps.is_empty()).then(|| Steps {
+            table: &self.wave.table,
+            steps: &self.wave.steps,
+            phase: self.phase0,
+            rate: self.rate,
+        })
+    }
+
     fn port(&self) -> Port<'_> {
         if self.ramping {
             Port::PerSample(&self.buf)
@@ -94,9 +121,44 @@ impl LfoRt {
     }
 }
 
+/// The Crush parameters of a band.
+fn crush_params(band: &Band) -> CrushParams {
+    CrushParams {
+        dc_offset: band.float("bitsDcOffset", 0.0),
+        jitter: band.float("jitter", 0.0),
+        treble: band.float("treble", 1.0),
+        damp: band.boolean("damp", false),
+        dither: band.boolean("dither", false),
+    }
+}
+
+/// The Drive parameters of a band.
+fn drive_params(band: &Band) -> DriveParams {
+    DriveParams {
+        style: internal_style(band.int("style", 0)),
+        input_gain: band.float("inputGain", 0.5),
+        output_gain: band.float("outputGain", 0.5),
+        push: band.float("push", 0.0),
+        grip: band.float("grip", 0.0),
+        tone: band.float("tone", 0.5),
+        accent: band.float("accent", 0.5),
+    }
+}
+
+/// The wave port of the section `id` of a band, `default` when the band has no such section.
+fn section_port<'a>(band: &Band, lfos: &'a [LfoRt], id: &str, default: f32) -> Port<'a> {
+    band.sections
+        .iter()
+        .position(|s| s.id == id)
+        .map(|k| lfos[k].port())
+        .unwrap_or(Port::Constant(default))
+}
+
 /// The DSP state of one band.
 struct BandRt {
     lfos: Vec<LfoRt>,
+    crush: Option<Box<CrushBand>>,
+    drive: Option<Box<DriveBand>>,
     gain: Smoother,
     haas_mix: Smoother,
     pan: Option<PanBand>,
@@ -115,6 +177,8 @@ impl BandRt {
                 .iter()
                 .map(|s| LfoRt::new(&s.lfo, shaper, sr))
                 .collect(),
+            crush: (shaper == 1).then(|| Box::new(CrushBand::new(sr, crush_params(band)))),
+            drive: (shaper == 9).then(|| Box::new(DriveBand::new(sr, drive_params(band)))),
             gain: Smoother::new(band.float("gain", 0.5), sr as f64, 0.0),
             haas_mix: Smoother::new(band.float("haasMix", 0.0), sr as f64, 0.0),
             pan: (shaper == 3).then(|| PanBand::new(sr)),
@@ -140,6 +204,10 @@ pub struct Processor {
     shapers: Vec<Option<ShaperRt>>,
     delay: [[f32; 2]; BASE_DELAY],
     dry: Vec<[f32; 2]>,
+    /// The latency of the shapers (Drive's oversampling), taken out of the base delay.
+    latency: usize,
+    /// The dry input delayed by `latency`.
+    dry_delay: Vec<[f32; 2]>,
 }
 
 impl Processor {
@@ -150,6 +218,8 @@ impl Processor {
             shapers: Vec::new(),
             delay: [[0.0; 2]; BASE_DELAY],
             dry: Vec::new(),
+            latency: 0,
+            dry_delay: Vec::new(),
         };
         p.set_state(state);
         p
@@ -167,6 +237,16 @@ impl Processor {
                 })
             })
             .collect();
+        // Drive's oversampling filters run inside the plugin's 16-sample base latency.
+        let latency = self.shapers[9]
+            .as_ref()
+            .and_then(|rt| rt.rt[0].drive.as_ref())
+            .map_or(0, |d| d.latency())
+            .min(BASE_DELAY);
+        if latency != self.latency {
+            self.latency = latency;
+            self.dry_delay = vec![[0.0; 2]; latency];
+        }
         self.state = state;
     }
 
@@ -194,6 +274,15 @@ impl Processor {
         let sr = self.sr as f64;
         self.dry.clear();
         self.dry.extend_from_slice(buf);
+        if self.latency > 0 {
+            let l = self.latency;
+            for f in self.dry.iter_mut() {
+                let out = self.dry_delay[0];
+                self.dry_delay.copy_within(1.., 0);
+                self.dry_delay[l - 1] = *f;
+                *f = out;
+            }
+        }
         if !self.state.bypassed {
             for k in self.state.order() {
                 let Some(rt) = self.shapers[k].as_mut() else {
@@ -230,13 +319,22 @@ impl Processor {
                         .unwrap_or(Port::Constant(1.0));
                     match k {
                         0 => {
+                            let lfo = brt.lfos.first();
                             let r = crate::shapers::time::range_seconds(
                                 band.int("delayTimeMax", 0),
                                 t.bpm as f32,
-                                1.0,
+                                lfo.map_or(1.0, |l| l.rate as f32),
                             );
+                            let steps = lfo.and_then(|l| l.steps());
                             if let Some(tb) = brt.time.as_mut() {
-                                tb.process(audio, port, r);
+                                tb.process(audio, port, r, steps);
+                            }
+                        }
+                        1 => {
+                            let bits = section_port(band, &brt.lfos, "bits", 1.0);
+                            let dec = section_port(band, &brt.lfos, "decimate", 1.0);
+                            if let Some(cb) = brt.crush.as_mut() {
+                                cb.process(audio, bits, dec, crush_params(band));
                             }
                         }
                         3 => {
@@ -273,6 +371,12 @@ impl Processor {
                                 );
                             }
                         }
+                        9 => {
+                            let w = section_port(band, &brt.lfos, "drive", 0.0);
+                            if let Some(db) = brt.drive.as_mut() {
+                                db.process(audio, w, drive_params(band));
+                            }
+                        }
                         11 => {
                             brt.stereo_offset
                                 .process(band.float("stereoOffset", 0.5), n);
@@ -298,6 +402,9 @@ impl Processor {
                         }
                         _ => {}
                     }
+                    if let Some(db) = brt.drive.as_mut() {
+                        db.delay_dry(&mut brt.dry);
+                    }
                     let m = band.mix;
                     dry_wet(audio, &brt.dry, |_| m);
                 }
@@ -321,9 +428,13 @@ impl Processor {
         } else {
             buf.copy_from_slice(&self.dry);
         }
-        // The base delay.
+        // The base delay, less the latency the shapers already added.
+        let d = BASE_DELAY - self.latency;
         for f in buf.iter_mut() {
-            let out = self.delay[0];
+            if d == 0 {
+                break;
+            }
+            let out = self.delay[BASE_DELAY - d];
             self.delay.copy_within(1.., 0);
             self.delay[BASE_DELAY - 1] = *f;
             *f = out;

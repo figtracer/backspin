@@ -210,7 +210,7 @@ pub fn render_table(points: &[Point]) -> Vec<f32> {
 
 /// The step positions of 0x2fcbb0: consecutive factor-3 points with dx < 2, plus 0 when the first
 /// factor-3 point is at 0 and the last at >= 8191.
-fn steps(points: &[Point]) -> Vec<usize> {
+pub fn steps(points: &[Point]) -> Vec<usize> {
     let p3: Vec<&Point> = points.iter().filter(|p| p.factor == 3).take(500).collect();
     let mut out = Vec::new();
     if p3.len() > 1 {
@@ -260,17 +260,28 @@ pub fn coefficients(table: &[f32], points: &[Point], step_fix: bool) -> Vec<[f32
 pub struct Wave {
     pub constant: Option<f32>,
     pub coefs: Vec<[f32; 4]>,
+    /// The rendered table (empty for a constant wave).
+    pub table: Vec<f32>,
+    /// The sorted step positions (`*(wave+0x90)`), in table units.
+    pub steps: Vec<usize>,
 }
 
 impl Wave {
     pub fn new(points: &[Point], step_fix: bool) -> Self {
         let constant = constant(points);
-        let coefs = if constant.is_some() {
-            Vec::new()
+        let (coefs, table, mut steps) = if constant.is_some() {
+            (Vec::new(), Vec::new(), Vec::new())
         } else {
-            coefficients(&render_table(points), points, step_fix)
+            let table = render_table(points);
+            (coefficients(&table, points, step_fix), table, steps(points))
         };
-        Self { constant, coefs }
+        steps.sort_unstable();
+        Self {
+            constant,
+            coefs,
+            table,
+            steps,
+        }
     }
 
     /// The Catmull-Rom read at table position `pos` (0x2df6b0): `f = f32(pos - int(pos))`,

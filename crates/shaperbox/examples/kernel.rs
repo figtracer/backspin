@@ -68,7 +68,12 @@ fn main() {
                 hm.process(p(2), n);
                 pan.process(block, wave, p(0) as i32, p(1), &hm);
             }
-            "time" => tb.process(block, wave, time::range_seconds(p(0) as i32, p(1), 1.0)),
+            "time" => tb.process(
+                block,
+                wave,
+                time::range_seconds(p(0) as i32, p(1), 1.0),
+                None,
+            ),
             _ => panic!("unknown shaper {shaper}"),
         }
     }
