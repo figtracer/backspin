@@ -6,7 +6,6 @@
 //! closing the dialog any other way restores the saved envelope.
 
 use super::Gui;
-use super::menus::GB_DIR;
 use super::paint::*;
 use backspin_engine::envelope::tools::{
     FilterSettings, SEQ_FIELDS, ScaleSettings, SeqSettings, SeqStep, SmoothSettings, ToolError,
@@ -92,7 +91,7 @@ fn default_kernel() -> Envelope {
         ],
     );
     if let Ok(data) =
-        std::fs::read(PathBuf::from(GB_DIR).join("Data/Maps/Env filter - default.fnv"))
+        std::fs::read(crate::paths::gross_beat().join("Data/Maps/Env filter - default.fnv"))
     {
         k.load_any(&data);
     }
@@ -393,7 +392,7 @@ fn tool_dialog(gui: &mut Gui, ctx: &Context) {
 }
 
 fn kernel_presets() -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = std::fs::read_dir(PathBuf::from(GB_DIR).join("Data/Maps"))
+    let mut v: Vec<PathBuf> = std::fs::read_dir(crate::paths::gross_beat().join("Data/Maps"))
         .into_iter()
         .flatten()
         .flatten()
@@ -641,7 +640,7 @@ fn about(gui: &mut Gui, ctx: &Context) {
         return;
     }
     if gui.dialogs.about_image.is_none()
-        && let Some(img) = load_png(&PathBuf::from(GB_DIR).join("Artwork/About.png"))
+        && let Some(img) = load_png(&crate::paths::gross_beat().join("Artwork/About.png"))
     {
         gui.dialogs.about_image = Some(ctx.load_texture("about", img, Default::default()));
     }

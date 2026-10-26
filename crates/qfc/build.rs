@@ -57,7 +57,11 @@ fn main() {
     b.include(here.join("ftconfig"))
         .include(ft.join("include"))
         .define("FT2_BUILD_LIBRARY", None)
-        .flag("-ffp-contract=off")
+        .flag(if std::env::var("TARGET").unwrap().contains("msvc") {
+            "/fp:precise"
+        } else {
+            "-ffp-contract=off"
+        })
         .warnings(false);
     for s in SOURCES {
         b.file(ft.join(s));

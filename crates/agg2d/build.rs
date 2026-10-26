@@ -4,6 +4,13 @@
 use std::path::PathBuf;
 
 fn main() {
+    let msvc = std::env::var("TARGET").unwrap().contains("msvc");
+    // No FP contraction: GCC/Clang contract by default; MSVC does not under /fp:precise.
+    let no_contract = if msvc {
+        "/fp:precise"
+    } else {
+        "-ffp-contract=off"
+    };
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let blend2d = root.join("third_party/blend2d");
     let asmjit = root.join("third_party/asmjit");
@@ -18,7 +25,7 @@ fn main() {
         .define("ASMJIT_DIR", &asmjit)
         .profile("Release")
         // FL's build does not contract floating point (vertices of arcs match only this way).
-        .cxxflag("-ffp-contract=off")
+        .cxxflag(no_contract)
         .build();
     println!("cargo:rustc-link-search=native={}/lib", dst.display());
     println!("cargo:rustc-link-lib=static=blend2d");
@@ -29,14 +36,14 @@ fn main() {
         .file("cpp/agg2d.cpp")
         .include(dst.join("include"))
         .define("BL_STATIC", None)
-        .flag("-ffp-contract=off")
+        .flag(no_contract)
         .flag_if_supported("-fno-exceptions")
         .flag_if_supported("-fno-rtti")
         .compile("agg2d");
     let target = std::env::var("TARGET").unwrap();
     if target.contains("apple") {
         println!("cargo:rustc-link-lib=c++");
-    } else {
+    } else if !msvc {
         println!("cargo:rustc-link-lib=stdc++");
     }
 }

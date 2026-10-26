@@ -15,13 +15,6 @@ use std::sync::Mutex;
 /// A deferred edit of the slot's envelope.
 type Edit = Box<dyn FnOnce(&mut Envelope) -> Result<(), ToolError>>;
 
-/// The FL install folder of Gross Beat (state presets, maps and artwork; SPEC.md decision 15).
-pub const GB_DIR: &str =
-    "/Applications/FL Studio 2026.app/Contents/Resources/FL/Plugins/Fruity/Effects/Gross Beat";
-
-/// The factory state presets of the local FL install.
-pub const PRESET_DIR: &str = "/Applications/FL Studio 2026.app/Contents/Resources/FL/Data/Patches/Plugin presets/Effects/Gross Beat";
-
 /// The "Image Line Envelope" clipboard of Copy state / Paste state. It lives in the process, so
 /// it is shared by every instance but not with FL.
 static STATE_CLIPBOARD: Mutex<Option<Vec<u8>>> = Mutex::new(None);
@@ -174,13 +167,7 @@ pub fn wheel_menu(gui: &mut Gui, _ui: &mut Ui, setter: &ParamSetter, r: &Respons
 
 /// The factory state presets of the local FL install, then the user's own, sorted by name.
 pub fn state_presets() -> Vec<PathBuf> {
-    let mut dirs = vec![PathBuf::from(PRESET_DIR)];
-    if let Some(home) = std::env::var_os("HOME") {
-        dirs.push(
-            PathBuf::from(home)
-                .join("Documents/Image-Line/FL Studio/Presets/Plugin presets/Effects/Gross Beat"),
-        );
-    }
+    let dirs = crate::paths::preset_dirs();
     let mut out = Vec::new();
     for d in dirs {
         let mut v: Vec<PathBuf> = std::fs::read_dir(d)
@@ -244,7 +231,7 @@ pub fn load_preset(gui: &mut Gui, setter: &ParamSetter, path: &std::path::Path) 
 
 /// The `.fnv` files of the Maps folder (the Presets submenu).
 fn presets() -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = std::fs::read_dir(PathBuf::from(GB_DIR).join("Data/Maps"))
+    let mut v: Vec<PathBuf> = std::fs::read_dir(crate::paths::gross_beat().join("Data/Maps"))
         .into_iter()
         .flatten()
         .flatten()

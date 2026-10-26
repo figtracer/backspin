@@ -1,5 +1,5 @@
 //! The ShaperBox section of the plugin: its persisted state, the processors handed to the audio
-//! thread, and the local preset library (`~/Library/Cableguys/ShaperBox3`, read at runtime).
+//! thread, and the local preset library (ShaperBox 3's, read at runtime).
 
 use backspin_shaperbox::graph::Processor;
 use backspin_shaperbox::state::State;
@@ -193,10 +193,9 @@ impl Pack {
 /// the plugin's order. Without the database every preset file is read and listed under
 /// "All presets" only.
 pub fn library() -> Vec<Pack> {
-    let Some(home) = std::env::var_os("HOME") else {
+    let Some(root) = crate::paths::shape_library() else {
         return Vec::new();
     };
-    let root = PathBuf::from(home).join("Library/Cableguys/ShaperBox3");
     let (mut all, mut packs) = from_db(&root).unwrap_or_else(|| (scan(&root), Vec::new()));
     all.sort_by_cached_key(|p| p.name.to_lowercase());
     packs.insert(
