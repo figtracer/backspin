@@ -40,14 +40,22 @@ fn shapes_match_the_formulas() {
             );
             env.points[1].eval(x)
         };
-        // Bit for bit with the vectors (made on macOS) where the platform libm is Apple's; other
-        // libms round some exp/ln/sin/cos results differently by an ulp.
-        let ulps = got.to_bits().abs_diff(want.to_bits());
-        let allowed = if cfg!(target_os = "macos") { 0 } else { 4 };
-        assert!(
-            ulps <= allowed,
-            "{kind} t={t} x={x}: {got} != {want} ({ulps} ulps)"
-        );
+        // Bit for bit with the vectors (made on macOS) where the platform libm is Apple's. Other
+        // libms round some exp/ln/sin/cos results differently by an ulp, which `exp(x) - 1`
+        // near zero magnifies in ulps but not in value.
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                got.to_bits(),
+                want.to_bits(),
+                "{kind} t={t} x={x}: {got} != {want}"
+            );
+        } else {
+            let err = (got - want).abs();
+            assert!(
+                err <= 1e-12 * want.abs() || err <= 1e-15,
+                "{kind} t={t} x={x}: {got} != {want}"
+            );
+        }
         n += 1;
     }
     assert!(n > 15000);
