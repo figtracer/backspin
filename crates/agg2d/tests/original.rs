@@ -1,5 +1,6 @@
 //! Compares the port with FL's own libblend2d.dylib (Agg2D through its vtable) where it is
-//! installed. Skipped otherwise.
+//! installed. Skipped otherwise. macOS only: it loads the library with `dlopen`.
+#![cfg(target_os = "macos")]
 
 use backspin_agg2d::Agg2D;
 use std::ffi::c_void;
