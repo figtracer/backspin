@@ -82,9 +82,18 @@ pub fn model(gui: &Gui) -> SbModel {
         enabled,
         gb_preset: gui.gb_preset.clone(),
         pack,
-        preset: state
+        // The library's name when the preset came from it, else the state's program name.
+        preset: gui
+            .sb_preset
             .as_ref()
-            .map(|s| s.name.clone())
+            .and_then(|path| {
+                let all = lib.as_ref()?.first()?;
+                all.presets
+                    .iter()
+                    .find(|p| &p.path == path)
+                    .map(|p| p.name.clone())
+            })
+            .or_else(|| state.as_ref().map(|s| s.name.clone()))
             .unwrap_or_else(|| "(none)".into()),
         selected: gui.sb_selected,
         band: gui.sb_band,
