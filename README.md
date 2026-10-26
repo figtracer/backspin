@@ -15,6 +15,8 @@ Backspin is a Rust reimplementation of Image-Line Gross Beat, built on
 cannot be told apart from the original: the same input, state and parameters
 give the same output, sample for sample.
 
+This is still being developed, a lot more to go.
+
 ## Highlights
 
 - Matches the original bit for bit on 5,086 offline renders on macOS arm64,
