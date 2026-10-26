@@ -28,6 +28,12 @@ give the same output, sample for sample.
 
 ## Quick start
 
+Download `Backspin-<version>-arm64.pkg` from the
+[releases](https://github.com/figtracer/backspin/releases) and open it: it installs
+`Backspin.vst3` and `Backspin.clap` into `/Library/Audio/Plug-Ins`. The installer is not
+notarized, so macOS asks for confirmation: right-click it and choose Open. To build it
+yourself, run `scripts/package.sh`. To build from source and install for your user only:
+
 ```sh
 git clone https://github.com/figtracer/backspin.git
 cd backspin
