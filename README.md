@@ -30,9 +30,11 @@ This is still being developed, a lot more to go.
   editor with 0 differing pixels, text included, through ports of its
   Blend2D wrapper and its QuickFontCache text renderer.
 - A shape section under the form: per-band shapers (time, crush, filter,
-  pan, reverb, volume, width, noise, drive, dynamics, liquid, pitch) with
-  envelope followers, read from a local ShaperBox 3 library or the presets a
-  release embeds, most of them bit-exact against ShaperBox 3.
+  pan, reverb, volume, delay, width, noise, drive, dynamics, liquid, limiter,
+  pitch) with envelope followers and MIDI and audio retriggering, read from a
+  local ShaperBox 3 library or the presets a release embeds, most of them
+  bit-exact against ShaperBox 3. Delay and Limiter come from ShaperBox's
+  decompiled code, which ShaperBox 3.6.3 itself never runs.
 - Clamp, a clipper at the end of the chain (Type A and B, LR/MS modes, up to
   16x oversampling), bit-exact against its C++ port.
 - Installers for macOS (Apple Silicon) and Windows (x64) that embed the
