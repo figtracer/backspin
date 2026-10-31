@@ -81,18 +81,27 @@ struct View {
     len: f64,
 }
 
+/// The code-exact painter maps the slot onto the editor's width and height minus one pixel
+/// (`EnvView`: 525 x 500 px in the 526 x 501 editor); the input uses the same span so a point is
+/// grabbed where it is drawn.
 impl View {
+    fn w(&self) -> f32 {
+        self.r.width() - 1.0
+    }
+    fn h(&self) -> f32 {
+        self.r.height() - 1.0
+    }
     fn x(&self, pos: f64) -> f32 {
-        self.r.min.x + (pos / self.len) as f32 * self.r.width()
+        self.r.min.x + (pos / self.len) as f32 * self.w()
     }
     fn y(&self, v: f64) -> f32 {
-        self.r.min.y + (1.0 - v as f32) * self.r.height()
+        self.r.min.y + (1.0 - v as f32) * self.h()
     }
     fn pos(&self, x: f32) -> f64 {
-        ((x - self.r.min.x) / self.r.width()) as f64 * self.len
+        ((x - self.r.min.x) / self.w()) as f64 * self.len
     }
     fn val(&self, y: f32) -> f64 {
-        (1.0 - (y - self.r.min.y) / self.r.height()) as f64
+        (1.0 - (y - self.r.min.y) / self.h()) as f64
     }
 }
 

@@ -817,7 +817,7 @@ pub fn refusal(gui: &mut Gui, e: ToolError) {
 #[cfg(test)]
 mod snapshots {
     use super::*;
-    use nih_plug::prelude::{GuiContext, ParamPtr, PluginApi, PluginState};
+    use nih_plug::prelude::{GuiContext, Param, ParamPtr, PluginApi, PluginState};
 
     struct NoHost;
 
@@ -1086,5 +1086,325 @@ mod snapshots {
         let second = Context::default();
         gui.on_open();
         assert_eq!(texture_uploads(&second, &mut gui), 1);
+    }
+
+    /// A host that records the parameter changes the editor asks for, as a DAW receives them.
+    #[derive(Default)]
+    struct RecordingHost {
+        log: std::sync::Mutex<Vec<(&'static str, ParamPtr, f32)>>,
+    }
+
+    impl GuiContext for RecordingHost {
+        fn plugin_api(&self) -> PluginApi {
+            PluginApi::Clap
+        }
+        fn request_resize(&self) -> bool {
+            false
+        }
+        unsafe fn raw_begin_set_parameter(&self, param: ParamPtr) {
+            self.log.lock().unwrap().push(("begin", param, 0.0));
+        }
+        unsafe fn raw_set_parameter_normalized(&self, param: ParamPtr, normalized: f32) {
+            self.log.lock().unwrap().push(("set", param, normalized));
+        }
+        unsafe fn raw_end_set_parameter(&self, param: ParamPtr) {
+            self.log.lock().unwrap().push(("end", param, 0.0));
+        }
+        fn get_state(&self) -> PluginState {
+            PluginState {
+                version: String::new(),
+                params: Default::default(),
+                fields: Default::default(),
+            }
+        }
+        fn set_state(&self, _state: PluginState) {}
+    }
+
+    impl RecordingHost {
+        /// The values set for `param`, and whether the change was wrapped in begin/end.
+        fn sets(&self, param: ParamPtr) -> (Vec<f32>, bool) {
+            let log = self.log.lock().unwrap();
+            let mine: Vec<_> = log.iter().filter(|(_, p, _)| *p == param).collect();
+            let values = mine
+                .iter()
+                .filter(|(k, _, _)| *k == "set")
+                .map(|e| e.2)
+                .collect();
+            let wrapped = mine.first().is_some_and(|e| e.0 == "begin")
+                && mine.last().is_some_and(|e| e.0 == "end");
+            (values, wrapped)
+        }
+    }
+
+    /// One editor window: a context kept across frames, with the time advancing at 60 Hz (drags
+    /// and double-clicks need both).
+    struct Session {
+        ctx: Context,
+        time: f64,
+    }
+
+    impl Session {
+        fn new(gui: &mut Gui) -> Self {
+            gui.on_open();
+            Self {
+                ctx: Context::default(),
+                time: 0.0,
+            }
+        }
+
+        /// Runs one frame per event list and returns how many frame textures were uploaded.
+        fn run(
+            &mut self,
+            gui: &mut Gui,
+            host: &dyn GuiContext,
+            frames: Vec<Vec<egui::Event>>,
+        ) -> usize {
+            let setter = ParamSetter::new(host);
+            let (w, h) = (EDITOR_SIZE.0 as f32, EDITOR_SIZE.1 as f32);
+            let mut uploads = 0;
+            for events in frames {
+                self.time += 1.0 / 60.0;
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(w, h))),
+                    time: Some(self.time),
+                    events,
+                    ..Default::default()
+                };
+                let out = self.ctx.run(input, |ctx| gui.frame(ctx, &setter));
+                uploads += out
+                    .textures_delta
+                    .set
+                    .iter()
+                    .filter(|(_, d)| d.image.size() == [w as usize, h as usize])
+                    .count();
+            }
+            uploads
+        }
+    }
+
+    fn button(at: Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+
+    /// A left-button drag from `from` to `to` in `steps` moves.
+    fn drag(from: Pos2, to: Pos2, steps: usize) -> Vec<Vec<egui::Event>> {
+        let mut f = vec![
+            vec![egui::Event::PointerMoved(from)],
+            vec![button(from, true)],
+        ];
+        for k in 1..=steps {
+            let t = k as f32 / steps as f32;
+            f.push(vec![egui::Event::PointerMoved(from + (to - from) * t)]);
+        }
+        f.push(vec![button(to, false)]);
+        f.push(vec![]);
+        f
+    }
+
+    fn double_click(at: Pos2) -> Vec<Vec<egui::Event>> {
+        vec![
+            vec![egui::Event::PointerMoved(at)],
+            vec![button(at, true)],
+            vec![button(at, false)],
+            vec![button(at, true)],
+            vec![button(at, false)],
+            vec![],
+        ]
+    }
+
+    /// A section-local point in editor coordinates.
+    fn section(x: i32, y: i32) -> Pos2 {
+        pos2(x as f32, (y + backspin_ui::HEIGHT) as f32)
+    }
+
+    fn centre(r: backspin_gfx::Rect) -> Pos2 {
+        section((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2)
+    }
+
+    /// A Gross Beat knob drag asks the host for a lower value (time mix starts at its maximum),
+    /// inside one gesture.
+    #[test]
+    fn knob_drag_sets_the_parameter() {
+        let mut gui = gui_with(None);
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        s.run(&mut gui, &host, vec![vec![]]);
+        let start = gui.params.time_mix.unmodulated_normalized_value();
+        s.run(&mut gui, &host, drag(pos2(31.0, 29.0), pos2(31.0, 79.0), 8));
+        let (values, wrapped) = host.sets(gui.params.time_mix.as_ptr());
+        assert!(wrapped, "no begin/end gesture");
+        assert!(
+            values.last().is_some_and(|&v| v < start),
+            "{values:?} from {start}"
+        );
+    }
+
+    /// Dragging an envelope point changes the slot in the model, sends it to the audio engine
+    /// and repaints the frame.
+    #[test]
+    fn envelope_point_drag_reaches_the_engine() {
+        let (shared, mut queues) = Shared::new();
+        let shared = Arc::new(shared);
+        let params = Arc::new(BackspinParams::new(shared.clone()));
+        let mut gui = Gui::new(params, shared);
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        s.run(&mut gui, &host, vec![vec![]]);
+        while queues.commands.pop().is_ok() {}
+        let (group, index) = (gui.group(), gui.edited[gui.group()]);
+        let env = gui.shared.model.lock().banks[group].slots[index]
+            .env
+            .clone();
+        // The editor's rect (298, 5, W - 304, H - 34) and its mapping.
+        let r = Rect::from_min_size(pos2(298.0, 5.0), vec2(526.0, 501.0));
+        let i = env.points.len() - 1;
+        let at = pos2(
+            r.min.x + (env.abs_pos(i) / env.length) as f32 * (r.width() - 1.0),
+            r.min.y + (1.0 - env.points[i].value) * (r.height() - 1.0),
+        );
+        let to = pos2(at.x, (at.y + 120.0).min(r.max.y - 2.0).max(r.min.y + 2.0));
+        let to = if (to.y - at.y).abs() < 10.0 {
+            pos2(at.x, at.y - 120.0)
+        } else {
+            to
+        };
+        let uploads = s.run(&mut gui, &host, drag(at, to, 10));
+        let after = gui.shared.model.lock().banks[group].slots[index]
+            .env
+            .clone();
+        assert_ne!(
+            after.points[i].value, env.points[i].value,
+            "the point did not move"
+        );
+        let mut sent = false;
+        while let Ok(c) = queues.commands.pop() {
+            if let crate::shared::Command::Slot {
+                bank,
+                index: k,
+                slot,
+                ..
+            } = c
+            {
+                sent |= bank == group
+                    && k == index
+                    && slot.env.points[i].value == after.points[i].value;
+            }
+        }
+        assert!(sent, "the edited slot never reached the audio engine");
+        assert!(uploads > 0, "the frame was not repainted");
+    }
+
+    /// Loads the first library preset whose shaper `k`'s middle band has an LFO into the shape
+    /// section, and selects that shaper.
+    fn gui_with_shape() -> Option<(Gui, usize)> {
+        let lib = crate::sb::library();
+        let all = lib.first()?;
+        let mut gui = gui_with(None);
+        let (k, bytes) = all.presets.iter().take(300).find_map(|p| {
+            let data = p.bytes()?.into_owned();
+            let tree = backspin_shaperbox::read_preset(&data).ok()?;
+            let st = backspin_shaperbox::state::State::from_tree(&tree);
+            let k = (0..16).find(|&k| {
+                st.shapers[k].visible
+                    && st.shapers[k].on
+                    && st.shapers[k].bands[1].mix == 1.0
+                    && !st.shapers[k].bands[1].sections.is_empty()
+            })?;
+            Some((k, data))
+        })?;
+        gui.shared.sb.load(&bytes).ok()?;
+        *gui.sb_library.lock() = Some(lib);
+        gui.sb_loading = true;
+        gui.select_shaper(k);
+        gui.sb_band = 1;
+        Some((gui, k))
+    }
+
+    /// A downward drag in the wave view lowers the band's mix, rebuilds the processors when the
+    /// drag ends and repaints the frame.
+    #[test]
+    fn wave_view_drag_sets_the_band_mix() {
+        let Some((mut gui, k)) = gui_with_shape() else {
+            return;
+        };
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        s.run(&mut gui, &host, vec![vec![]]);
+        gui.shared.sb.latency_dirty.store(false, Ordering::Relaxed);
+        let w = backspin_ui::sb::layout::WAVE;
+        let at = centre(w);
+        let uploads = s.run(&mut gui, &host, drag(at, at + vec2(0.0, 60.0), 6));
+        let mix = gui.shared.sb.model.lock().state().shapers[k].bands[1].mix;
+        assert!(mix < 0.9, "mix {mix}");
+        assert!(
+            gui.shared.sb.latency_dirty.load(Ordering::Relaxed),
+            "processors not rebuilt"
+        );
+        assert!(uploads > 0, "the frame was not repainted");
+    }
+
+    /// A double-click on a rack cell turns that shaper off, and another turns it back on.
+    #[test]
+    fn rack_double_click_toggles_the_shaper() {
+        let Some((mut gui, k)) = gui_with_shape() else {
+            return;
+        };
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        s.run(&mut gui, &host, vec![vec![]]);
+        let r = backspin_ui::sb::layout::RACK;
+        let (cw, ch) = ((r.x1 - r.x0) / 4, (r.y1 - r.y0) / 4);
+        let cell = section(
+            r.x0 + (k as i32 % 4) * cw + cw / 2,
+            r.y0 + (k as i32 / 4) * ch + ch / 2,
+        );
+        let on = |g: &Gui| {
+            let st = g.shared.sb.model.lock().state();
+            st.shapers[k].visible && st.shapers[k].on
+        };
+        assert!(on(&gui));
+        let uploads = s.run(&mut gui, &host, double_click(cell));
+        assert!(!on(&gui), "the double-click did not turn it off");
+        assert!(uploads > 0, "the frame was not repainted");
+        // A pause, so the next two clicks are not a triple click.
+        s.run(&mut gui, &host, vec![vec![]; 40]);
+        s.run(&mut gui, &host, double_click(cell));
+        assert!(on(&gui), "the second double-click did not turn it back on");
+    }
+
+    /// Clamp's ceiling knob and its toggle ask the host for their parameters.
+    #[test]
+    fn clamp_controls_set_their_parameters() {
+        let mut gui = gui_with(None);
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        s.run(&mut gui, &host, vec![vec![]]);
+        let ceil = backspin_ui::sb::layout::CLAMP_KNOBS[2];
+        s.run(
+            &mut gui,
+            &host,
+            drag(centre(ceil), centre(ceil) + vec2(0.0, 40.0), 6),
+        );
+        let (values, wrapped) = host.sets(gui.params.clamp.ceiling.as_ptr());
+        assert!(wrapped, "no begin/end gesture");
+        assert!(values.last().is_some_and(|&v| v < 1.0), "{values:?}");
+        let toggle = centre(backspin_ui::sb::layout::CLAMP);
+        s.run(
+            &mut gui,
+            &host,
+            vec![
+                vec![egui::Event::PointerMoved(toggle)],
+                vec![button(toggle, true)],
+                vec![button(toggle, false)],
+                vec![],
+            ],
+        );
+        let (values, wrapped) = host.sets(gui.params.clamp.on.as_ptr());
+        assert!(wrapped && values == [1.0], "{values:?}");
     }
 }
