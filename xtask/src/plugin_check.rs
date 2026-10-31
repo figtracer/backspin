@@ -43,6 +43,7 @@ pub(crate) struct Check {
 /// A shape preset (its file bytes) and Clamp's settings.
 #[derive(Clone)]
 pub(crate) struct Chain {
+    pub name: String,
     pub shape: Vec<u8>,
     pub clamp: backspin_clamp::Params,
 }
@@ -150,7 +151,39 @@ pub fn run(_args: &[String]) -> Result<(), String> {
             tempo: 120.0,
             block: 512,
             notes: vec![],
-            chain: Some(Chain { shape, clamp }),
+            chain: Some(Chain {
+                name: name.clone(),
+                shape,
+                clamp,
+            }),
+        });
+    }
+    // MIDI note-ons retrigger the shape section's LFOs (and switch Gross Beat's slots).
+    if let Some(shape) = shape_preset("Ducking MIDI") {
+        checks.push(Check {
+            preset: "Momentary",
+            time: 0,
+            volume: 0,
+            input: "noise",
+            sr: 48000,
+            tempo: 120.0,
+            block: 512,
+            notes: vec![
+                (512 * 20, 61, true),
+                (512 * 60, 61, false),
+                (512 * 90, 64, true),
+                (512 * 150, 64, false),
+                (512 * 200, 61, true),
+                (512 * 260, 61, false),
+            ],
+            chain: Some(Chain {
+                name: "Ducking MIDI".into(),
+                shape,
+                clamp: backspin_clamp::Params {
+                    bypass: true,
+                    ..Default::default()
+                },
+            }),
         });
     }
     let vst3 = unsafe { crate::vst3_check::Vst3::open()? };
@@ -165,7 +198,7 @@ pub fn run(_args: &[String]) -> Result<(), String> {
             total += 1;
             let r = unsafe { check(host, dir, c) };
             let tag = format!(
-                "{format} {} t={} v={} in={} sr={} bpm={} blk={} notes={}",
+                "{format} {} t={} v={} in={} sr={} bpm={} blk={} notes={}{}",
                 c.preset,
                 c.time,
                 c.volume,
@@ -173,7 +206,10 @@ pub fn run(_args: &[String]) -> Result<(), String> {
                 c.sr,
                 c.tempo,
                 c.block,
-                c.notes.len()
+                c.notes.len(),
+                c.chain
+                    .as_ref()
+                    .map_or(String::new(), |ch| format!(" chain={:?}", ch.name))
             );
             match r {
                 Ok(None) => println!("pass {tag}"),
@@ -401,7 +437,7 @@ fn apply_chain(
     chain: &Chain,
     beat_factor: Option<f64>,
 ) -> Result<(), String> {
-    use backspin_shaperbox::graph::{Processor, Transport};
+    use backspin_shaperbox::graph::{NoteEvent, Processor, Transport};
     let tree = backspin_shaperbox::read_preset(&chain.shape)?;
     let state = backspin_shaperbox::state::State::from_tree(&tree);
     let mut sb = Processor::new(state, c.sr as f32);
@@ -414,13 +450,27 @@ fn apply_chain(
         let host = beat_factor.map_or(beats, |f| (beats * f).round() / f);
         let ppq = host * PPQ / PPQ;
         let block = &mut buf[pos..pos + n];
-        sb.process(
+        // The note-ons of the block, as the plugin hands them on (channel 1, offsets in the block).
+        let events: Vec<NoteEvent> = c
+            .notes
+            .iter()
+            .filter(|&&(at, _, on)| on && at >= pos && at < pos + n)
+            .map(|&(at, note, _)| NoteEvent {
+                offset: at - pos,
+                channel: 1,
+                note,
+                on: true,
+            })
+            .collect();
+        sb.process_with_events(
             block,
             Transport {
                 ppq,
                 bpm: c.tempo,
                 playing: true,
             },
+            None,
+            &events,
         );
         if !chain.clamp.bypass {
             for (i, f) in block.iter().enumerate() {
@@ -438,6 +488,13 @@ fn apply_chain(
         pos += n;
     }
     Ok(())
+}
+
+/// A shape preset of the local library by name.
+fn shape_preset(name: &str) -> Option<Vec<u8>> {
+    let lib = backspin_presets::shape_library(None);
+    let p = lib.first()?.presets.iter().find(|p| p.name == name)?;
+    Some(p.bytes()?.into_owned())
 }
 
 /// Shape presets for the chain checks: the first `n` of the local library with at least three
