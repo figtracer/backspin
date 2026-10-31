@@ -47,7 +47,8 @@ pub fn create(params: Arc<BackspinParams>, shared: Arc<Shared>) -> Option<Box<dy
     create_egui_editor(
         params.editor_state.clone(),
         state,
-        |ctx, _| {
+        |ctx, gui| {
+            gui.on_open();
             let mut style = (*ctx.style()).clone();
             style.visuals.window_fill = rgb(0x3b4a54);
             style.visuals.panel_fill = PANEL;
@@ -101,8 +102,8 @@ pub struct Gui {
     pub gb_preset: String,
     /// The shape mix knob drag: the start value and the pointer travel.
     pub sb_mix_drag: Option<(f32, f32)>,
-    /// The texture of the code-exact frame.
-    frame_tex: Option<egui::TextureHandle>,
+    /// The code-exact frame of the open editor window.
+    frame: frame::FrameCache,
 }
 
 impl Gui {
@@ -145,8 +146,17 @@ impl Gui {
             sb_band: 1,
             gb_preset: "(current)".into(),
             sb_mix_drag: None,
-            frame_tex: None,
+            frame: frame::FrameCache::default(),
         }
+    }
+
+    /// Called when an editor window opens: the state kept between windows must not refer to the
+    /// previous window (its egui context owned the frame texture) or to its pointer drags.
+    fn on_open(&mut self) {
+        self.frame = frame::FrameCache::default();
+        self.knob_drag = None;
+        self.scratch_drag = None;
+        self.sb_mix_drag = None;
     }
 
     /// Selects shaper `k` in the ShaperBox section and shows the band its split selects.
@@ -255,9 +265,9 @@ impl Gui {
                 let full = ui.max_rect();
                 // The Gross Beat form keeps its own height; the ShaperBox section sits below.
                 let (w, h) = (full.width(), backspin_ui::HEIGHT as f32);
-                let mut tex = self.frame_tex.take();
-                frame::show(self, ui, &mut tex);
-                self.frame_tex = tex;
+                let mut cache = std::mem::take(&mut self.frame);
+                frame::show(self, ui, &mut cache);
+                self.frame = cache;
                 self.left_column(ui, setter, h);
                 sb_section::show(self, ui, setter);
                 if !self.compact {
@@ -1130,5 +1140,36 @@ mod snapshots {
         );
         click_frames(&mut gui, click(at));
         assert_eq!(gui.gb_preset, names[1]);
+    }
+
+    /// Runs one frame in `ctx` and returns how many textures it created or updated.
+    fn texture_uploads(ctx: &Context, gui: &mut Gui) -> usize {
+        let host = NoHost;
+        let setter = ParamSetter::new(&host);
+        let (w, h) = (EDITOR_SIZE.0 as f32, EDITOR_SIZE.1 as f32);
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(w, h))),
+            ..Default::default()
+        };
+        let out = ctx.run(input, |ctx| gui.frame(ctx, &setter));
+        out.textures_delta
+            .set
+            .iter()
+            .filter(|(_, d)| d.image.size() == [EDITOR_SIZE.0 as usize, EDITOR_SIZE.1 as usize])
+            .count()
+    }
+
+    /// Closing and reopening the editor gives the new window its own frame texture, and an
+    /// unchanged frame is not uploaded again.
+    #[test]
+    fn reopened_editor_uploads_its_frame() {
+        let mut gui = gui_with(None);
+        let first = Context::default();
+        gui.on_open();
+        assert_eq!(texture_uploads(&first, &mut gui), 1);
+        assert_eq!(texture_uploads(&first, &mut gui), 0);
+        let second = Context::default();
+        gui.on_open();
+        assert_eq!(texture_uploads(&second, &mut gui), 1);
     }
 }

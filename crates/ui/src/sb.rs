@@ -48,7 +48,7 @@ pub mod layout {
 }
 
 /// One shaper of the rack.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShaperCell {
     pub name: String,
     pub visible: bool,
@@ -58,7 +58,7 @@ pub struct ShaperCell {
 }
 
 /// What the section shows.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SbModel {
     pub enabled: bool,
     pub gb_preset: String,

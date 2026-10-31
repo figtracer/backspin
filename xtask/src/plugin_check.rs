@@ -140,12 +140,90 @@ pub fn run(_args: &[String]) -> Result<(), String> {
             }
         }
     }
+    total += 1;
+    match unsafe { concurrent(&lib, &checks) } {
+        Ok(()) => println!("pass clap two instances at once"),
+        Err(e) => {
+            failed += 1;
+            println!("FAIL clap two instances at once: {e}");
+        }
+    }
     if failed > 0 {
         return Err(format!("{failed} of {total} checks failed"));
     }
     println!("all {total} checks pass");
     Ok(())
 }
+
+/// Two instances processing at the same time on two threads (as a DAW runs two tracks) render
+/// exactly what each renders alone.
+unsafe fn concurrent(lib: &Library, checks: &[Check]) -> Result<(), String> {
+    let pick = |name: &str| {
+        checks
+            .iter()
+            .find(|c| c.preset == name && c.input == "noise")
+            .ok_or(format!("no {name} check"))
+    };
+    let jobs = [pick("Repeater")?, pick("Stutter")?];
+    let inputs: Vec<Job> = jobs
+        .iter()
+        .map(|c| {
+            let data = std::fs::read(Path::new(PRESET_DIR).join(format!("{}.fst", c.preset)))
+                .map_err(|e| e.to_string())?;
+            let blob = fst_state(&data).map_err(|e| e.to_string())?.to_vec();
+            let mut e = Engine::new();
+            e.load_state(&blob);
+            let mut params = e.params;
+            params[0] = c.time;
+            params[1] = c.volume;
+            let frames = 4 * c.sr as usize;
+            let input = generate("ramp", frames, c.sr as f64)?;
+            Ok((blob, params, input))
+        })
+        .collect::<Result<_, String>>()?;
+    let alone: Vec<Vec<[f32; 2]>> = jobs
+        .iter()
+        .zip(&inputs)
+        .map(|(c, (blob, params, input))| unsafe { lib.render(blob, params, input, c) })
+        .collect::<Result<_, String>>()?;
+    let shared = SharedLibrary(lib);
+    let together: Vec<Result<Vec<[f32; 2]>, String>> = std::thread::scope(|s| {
+        let handles: Vec<_> = jobs
+            .iter()
+            .zip(&inputs)
+            .map(|(c, (blob, params, input))| {
+                let shared = &shared;
+                // SAFETY: CLAP factories and separate plugin instances may be used from separate
+                // threads; each thread owns its instance.
+                s.spawn(move || unsafe { shared.0.render(blob, params, input, c) })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    for ((c, a), t) in jobs.iter().zip(&alone).zip(together) {
+        let t = t?;
+        if a.len() != t.len()
+            || a.iter()
+                .zip(&t)
+                .any(|(x, y)| x[0].to_bits() != y[0].to_bits() || x[1].to_bits() != y[1].to_bits())
+        {
+            return Err(format!(
+                "{} differs when another instance runs alongside",
+                c.preset
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// One render of [`concurrent`]: the state blob, the parameters and the input.
+type Job = (Vec<u8>, [i32; 9], Vec<[f32; 2]>);
+
+/// The library shared between the render threads of [`concurrent`].
+struct SharedLibrary<'a>(&'a Library);
+
+// SAFETY: the CLAP entry and factory are thread-safe by the CLAP specification.
+unsafe impl Sync for SharedLibrary<'_> {}
 
 /// Renders one check through the plugin and through `backspin-render`, and returns the max
 /// difference and the first differing sample, or `None` if they are bit-identical.

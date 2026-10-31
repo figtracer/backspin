@@ -6,7 +6,7 @@
 use super::paint::{Glyph, font, glyph};
 use super::{Gui, HOLD_ITEMS, SYNC_ITEMS};
 use backspin_gfx::{Dib, Rect as DRect};
-use backspin_ui::{Font, HEIGHT, Model, PANEL, SB_HEIGHT, Text, WIDTH, paint, paint_sb};
+use backspin_ui::{Font, HEIGHT, Model, PANEL, SB_HEIGHT, SbModel, Text, WIDTH, paint, paint_sb};
 use nih_plug_egui::egui::{
     self, Align2, Color32, ColorImage, Painter, Rect, TextureHandle, TextureOptions, pos2, vec2,
 };
@@ -178,26 +178,48 @@ fn draw_item(p: &Painter, it: &Item) {
         .text(pos2(x, y), Align2([ha, va]), &it.text, font(size), c);
 }
 
-/// Paints the frame and the text overlay (every egui frame; the bitmap is rebuilt each time).
-pub fn show(gui: &mut Gui, ui: &egui::Ui, tex: &mut Option<TextureHandle>) {
-    let mut dib = Dib::new(WIDTH, HEIGHT + SB_HEIGHT, PANEL);
-    let mut overlay = Overlay::default();
-    paint(&mut dib, &model(gui), &mut overlay);
-    dib.move_origin(0, HEIGHT);
-    paint_sb(&mut dib, &super::sb_section::model(gui), &mut overlay);
-    dib.move_origin(0, -HEIGHT);
-    let rgba: Vec<u8> = dib
-        .pixels()
-        .iter()
-        .flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8, 0xff])
-        .collect();
-    let image =
-        ColorImage::from_rgba_unmultiplied([WIDTH as usize, (HEIGHT + SB_HEIGHT) as usize], &rgba);
-    let t = tex.get_or_insert_with(|| {
-        ui.ctx()
-            .load_texture("backspin-frame", image.clone(), TextureOptions::NEAREST)
-    });
-    t.set(image, TextureOptions::NEAREST);
+/// The last painted frame: the models it shows, its text draws and its texture. The bitmap is
+/// repainted and uploaded only when the models change.
+#[derive(Default)]
+pub struct FrameCache {
+    shown: Option<(Model, SbModel)>,
+    overlay: Overlay,
+    tex: Option<TextureHandle>,
+}
+
+/// Paints the frame (when its models changed) and the text overlay.
+pub fn show(gui: &mut Gui, ui: &egui::Ui, cache: &mut FrameCache) {
+    let models = (model(gui), super::sb_section::model(gui));
+    if cache.tex.is_none() || cache.shown.as_ref() != Some(&models) {
+        let (w, h) = (WIDTH, HEIGHT + SB_HEIGHT);
+        let mut dib = Dib::new(w, h, PANEL);
+        let mut overlay = Overlay::default();
+        paint(&mut dib, &models.0, &mut overlay);
+        dib.move_origin(0, HEIGHT);
+        paint_sb(&mut dib, &models.1, &mut overlay);
+        dib.move_origin(0, -HEIGHT);
+        let image = ColorImage {
+            size: [w as usize, h as usize],
+            pixels: dib
+                .pixels()
+                .iter()
+                .map(|&p| Color32::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8))
+                .collect(),
+        };
+        match &mut cache.tex {
+            Some(t) => t.set(image, TextureOptions::NEAREST),
+            None => {
+                cache.tex = Some(ui.ctx().load_texture(
+                    "backspin-frame",
+                    image,
+                    TextureOptions::NEAREST,
+                ))
+            }
+        }
+        cache.overlay = overlay;
+        cache.shown = Some(models);
+    }
+    let Some(t) = &cache.tex else { return };
     let p = ui.painter();
     let full = Rect::from_min_size(
         pos2(0.0, 0.0),
@@ -209,7 +231,7 @@ pub fn show(gui: &mut Gui, ui: &egui::Ui, tex: &mut Option<TextureHandle>) {
         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
         Color32::WHITE,
     );
-    for it in &overlay.0 {
+    for it in &cache.overlay.0 {
         draw_item(p, it);
     }
 }

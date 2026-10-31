@@ -61,7 +61,7 @@ impl Text for NoText {
 }
 
 /// What the painters show.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Model {
     /// Slot names (empty = "Slot N") and whether a slot is empty, per group (0 time, 1 volume).
     pub names: [Vec<String>; 2],
