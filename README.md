@@ -26,14 +26,28 @@ This is still being developed, a lot more to go.
   and saved states load back into the original.
 - 36 time slots and 36 volume slots with the 13 envelope shapes, MIDI slot
   switching, hold, scratching and all the editing tools.
-- An egui editor that follows the original layout, colours and menus.
+- The original's editor, drawn code-exactly: the full frame matches the real
+  editor with 0 differing pixels, text included, through ports of its
+  Blend2D wrapper and its QuickFontCache text renderer.
+- A shape section under the form: per-band shapers (time, crush, filter,
+  pan, reverb, volume, width, noise, drive, dynamics, liquid, pitch) with
+  envelope followers, read from a local ShaperBox 3 library or the presets a
+  release embeds, most of them bit-exact against ShaperBox 3.
+- Clamp, a clipper at the end of the chain (Type A and B, LR/MS modes, up to
+  16x oversampling), bit-exact against its C++ port.
+- Installers for macOS (Apple Silicon) and Windows (x64) that embed the
+  presets and the editor's fonts.
 
 ## Quick start
 
-Download `Backspin-<version>-arm64.pkg` from the
-[releases](https://github.com/figtracer/backspin/releases) and open it: it installs
-`Backspin.vst3` and `Backspin.clap` into `/Library/Audio/Plug-Ins`. The installer is not
-notarized, so macOS asks for confirmation: right-click it and choose Open. To build it
+Download an installer from the
+[releases](https://github.com/figtracer/backspin/releases). On macOS, open
+`Backspin-<version>-arm64.pkg`: it installs `Backspin.vst3` and `Backspin.clap` into
+`/Library/Audio/Plug-Ins`; it is not notarized, so right-click it and choose Open. On
+Windows, run `Backspin-<version>-windows-x64-setup.exe`: it installs into
+`Common Files\VST3` and `Common Files\CLAP`; it is not signed, so SmartScreen may ask
+(More info, Run anyway). The Windows build needs a CPU with FMA (Intel since 2013, AMD
+since 2012). To build it
 yourself, run `scripts/package.sh`. To build from source and install for your user only:
 
 ```sh
