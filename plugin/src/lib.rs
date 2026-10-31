@@ -120,14 +120,16 @@ impl Backspin {
         (beats + offset as f64 * self.tempo / 60.0 / self.sample_rate as f64) * PPQ as f64
     }
 
-    /// Gross Beat's 15 samples, plus the ShaperBox base delay when that section runs.
+    /// Gross Beat's 15 samples, plus the shape section's when it runs (its base delay, which a
+    /// state can turn off, or Drive's oversampler latency).
     fn latency(&self) -> u32 {
         LATENCY as u32
-            + if self.queues.sb.processor.is_some() {
-                backspin_shaperbox::graph::BASE_DELAY as u32
-            } else {
-                0
-            }
+            + self
+                .queues
+                .sb
+                .processor
+                .as_ref()
+                .map_or(0, |p| p.latency() as u32)
     }
 
     /// Applies host parameter changes (FL calls ProcessParam between blocks).
