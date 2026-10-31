@@ -26,7 +26,7 @@ const NAMES: [&str; 16] = [
 ];
 
 /// Shapers whose DSP is ported (the others pass audio through).
-const PORTED: [usize; 8] = [0, 1, 3, 5, 7, 8, 9, 11];
+const PORTED: [usize; 10] = [0, 1, 2, 3, 4, 5, 7, 8, 9, 11];
 
 const BANDS: [&str; 3] = ["low", "mid", "high"];
 

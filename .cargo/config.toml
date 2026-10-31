@@ -1,2 +1,8 @@
 [alias]
 xtask = "run --package xtask --release --"
+
+# The shapers use fused multiply-adds throughout (the plugin's arithmetic). Without the FMA
+# instructions every mul_add is a software call on x86-64; FMA3 is in every Intel CPU since
+# Haswell (2013) and every AMD CPU since Piledriver (2012).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+fma"]
