@@ -45,6 +45,9 @@ pub struct Backspin {
     /// The Clamp clipper (built in `initialize`) and its planar work buffers.
     clamp: Option<backspin_clamp::Clamp>,
     clamp_buf: [Vec<f32>; 2],
+    /// The shape section's note-ons of the block (for LFO retriggering), preallocated in
+    /// `initialize`.
+    sb_events: Vec<backspin_shaperbox::graph::NoteEvent>,
 }
 
 impl Default for Backspin {
@@ -65,6 +68,7 @@ impl Default for Backspin {
             own_pos: 0,
             clamp: None,
             clamp_buf: [Vec::new(), Vec::new()],
+            sb_events: Vec::new(),
         }
     }
 }
@@ -155,6 +159,8 @@ impl Plugin for Backspin {
         AudioIOLayout {
             main_input_channels: NonZeroU32::new(2),
             main_output_channels: NonZeroU32::new(2),
+            // No sidechain port yet: nih-plug's wrappers read past the host's input buses when a
+            // host connects fewer than the plugin declares (`aux_input_idx > audio_inputs_count`).
             ..AudioIOLayout::const_default()
         },
         AudioIOLayout {
@@ -216,6 +222,7 @@ impl Plugin for Backspin {
         self.buf = vec![[0.0; 2]; block];
         self.clamp = Some(backspin_clamp::Clamp::new(buffer_config.sample_rate, block));
         self.clamp_buf = [vec![0.0; block], vec![0.0; block]];
+        self.sb_events = Vec::with_capacity(1024);
         self.playing = false;
         self.next_pos = None;
         self.own_pos = 0;
@@ -275,7 +282,25 @@ impl Plugin for Backspin {
             }
         }
         let mut start = 0;
+        self.sb_events.clear();
         while let Some(event) = context.next_event() {
+            if let NoteEvent::NoteOn {
+                channel,
+                note,
+                velocity,
+                timing,
+                ..
+            } = event
+                && velocity > 0.0
+                && self.sb_events.len() < self.sb_events.capacity()
+            {
+                self.sb_events.push(backspin_shaperbox::graph::NoteEvent {
+                    offset: (timing as usize).min(n.saturating_sub(1)),
+                    channel: channel + 1,
+                    note,
+                    on: true,
+                });
+            }
             let msg = match event {
                 NoteEvent::NoteOn {
                     channel,
@@ -316,13 +341,15 @@ impl Plugin for Backspin {
         }
         let beats = self.ticks(pos, 0) / PPQ as f64;
         if let Some(sbp) = self.queues.sb.processor.as_mut() {
-            sbp.process(
+            sbp.process_with_events(
                 &mut self.buf[..n],
                 backspin_shaperbox::graph::Transport {
                     ppq: beats,
                     bpm: tempo,
                     playing,
                 },
+                None,
+                &self.sb_events,
             );
         }
         self.process_clamp(n);

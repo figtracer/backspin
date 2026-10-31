@@ -25,8 +25,9 @@ const NAMES: [&str; 16] = [
     "Dynamics", "Liquid", "Scope", "Shift", "Limiter", "Pitch",
 ];
 
-/// Shapers whose DSP is ported (the others pass audio through).
-const PORTED: [usize; 12] = [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 15];
+/// Shapers with DSP. Scope only displays and Shift has no algorithm in ShaperBox 3 either;
+/// both pass audio through, as there.
+const PORTED: [usize; 14] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15];
 
 const BANDS: [&str; 3] = ["low", "mid", "high"];
 
@@ -141,7 +142,7 @@ pub fn model(gui: &Gui) -> SbModel {
         readout = format!("{readout} \u{b7} {timing}");
     }
     if !PORTED.contains(&k) {
-        readout.push_str(" \u{b7} not available yet");
+        readout.push_str(" \u{b7} passes audio through, as in ShaperBox");
     }
     out.readout = readout;
     out
