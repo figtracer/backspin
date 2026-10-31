@@ -33,11 +33,12 @@ fn main() -> nih_plug_xtask::Result<()> {
                     std::process::exit(1);
                 }
                 println!(
-                    "{out}: {} Gross Beat presets, {} maps, {} shape presets in {} groups, {} bytes",
+                    "{out}: {} Gross Beat presets, {} maps, {} shape presets in {} groups, {} fonts, {} bytes",
                     pack.gross_beat.len(),
                     pack.maps.len(),
                     pack.shapes.len(),
                     pack.groups.len(),
+                    pack.fonts.len(),
                     bytes.len()
                 );
             }

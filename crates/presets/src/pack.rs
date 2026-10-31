@@ -1,10 +1,10 @@
-//! The preset pack: `BKSPPACK`, a u32 version, then four sections. Three hold named files (the
-//! Gross Beat state presets, the envelope maps and the shape presets); the fourth holds the
-//! shape preset groups as indices into the shape presets. Integers are little-endian u32;
+//! The preset pack: `BKSPPACK`, a u32 version, then five sections. Three hold named files (the
+//! Gross Beat state presets, the envelope maps and the shape presets), the fourth holds the
+//! shape preset groups as indices into the shape presets, and the fifth the editor's FL fonts. Integers are little-endian u32;
 //! strings and files are a u32 length and the bytes.
 
 const MAGIC: &[u8; 8] = b"BKSPPACK";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 /// A pack being built.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -13,6 +13,7 @@ pub struct PackData {
     pub maps: Vec<(String, Vec<u8>)>,
     pub shapes: Vec<(String, Vec<u8>)>,
     pub groups: Vec<(String, Vec<u32>)>,
+    pub fonts: Vec<(String, Vec<u8>)>,
 }
 
 /// A pack read from bytes that live for the whole program (the embedded pack).
@@ -22,6 +23,7 @@ pub struct Embedded {
     pub maps: Vec<(&'static str, &'static [u8])>,
     pub shapes: Vec<(&'static str, &'static [u8])>,
     pub groups: Vec<(&'static str, Vec<u32>)>,
+    pub fonts: Vec<(&'static str, &'static [u8])>,
 }
 
 fn put(out: &mut Vec<u8>, b: &[u8]) {
@@ -52,6 +54,7 @@ impl PackData {
                 out.extend(i.to_le_bytes());
             }
         }
+        put_files(&mut out, &self.fonts);
         out
     }
 }
@@ -100,11 +103,13 @@ impl Embedded {
                 Some((name, items))
             })
             .collect::<Option<_>>()?;
+        let fonts = r.files()?;
         Some(Self {
             gross_beat,
             maps,
             shapes,
             groups,
+            fonts,
         })
     }
 }
@@ -120,6 +125,7 @@ mod tests {
             maps: vec![("Default".into(), vec![])],
             shapes: vec![("Init".into(), vec![9; 40]), ("Wobble".into(), vec![7])],
             groups: vec![("Motion@Wobble".into(), vec![1, 0])],
+            fonts: vec![("Ubuntu-R.ttf".into(), vec![5, 6])],
         };
         let bytes: &'static [u8] = pack.encode().leak();
         let e = Embedded::decode(bytes).unwrap();
@@ -127,6 +133,7 @@ mod tests {
         assert_eq!(e.maps, [("Default", &[][..])]);
         assert_eq!(e.shapes[1], ("Wobble", &[7u8][..]));
         assert_eq!(e.groups, [("Motion@Wobble", vec![1, 0])]);
+        assert_eq!(e.fonts, [("Ubuntu-R.ttf", &[5u8, 6][..])]);
         assert!(Embedded::decode(&[]).is_none());
         assert!(Embedded::decode(&bytes[..bytes.len() - 1]).is_none());
     }

@@ -199,6 +199,12 @@ fn spec(font: Font) -> Spec {
     }
 }
 
+/// Where [`QfcText::locate`] found a font's file.
+enum Located {
+    File(PathBuf),
+    Memory(&'static [u8]),
+}
+
 /// An opened font and the spacings of its requests.
 struct Entry {
     font: qfc::Font,
@@ -214,6 +220,8 @@ pub struct QfcText {
     files: HashMap<PathBuf, Option<Source>>,
     fallbacks: Arc<[(PathBuf, i64)]>,
     fl_fonts: Option<PathBuf>,
+    /// FL fonts from memory (a release build's embedded pack), for machines without FL.
+    embedded: Vec<(&'static str, &'static [u8])>,
     items: Vec<Item>,
     utf16: Vec<u16>,
 }
@@ -235,24 +243,41 @@ impl QfcText {
                 .filter_map(|&(name, index)| paths::system_font(name).map(|p| (p, index)))
                 .collect(),
             fl_fonts: paths::fonts(),
+            embedded: Vec::new(),
             items: Vec::with_capacity(64),
             utf16: Vec::with_capacity(64),
         }
     }
 
-    /// Returns true if every font of the form resolves to its own file (no fallback font).
-    pub fn complete(&self) -> bool {
-        Font::ALL.iter().all(|&f| self.path(&spec(f)).is_some())
+    /// The same, with FL fonts in memory used when the FL install has none: `(file name, bytes)`.
+    pub fn with_embedded(embedded: Vec<(&'static str, &'static [u8])>) -> Self {
+        Self {
+            embedded,
+            ..Self::new()
+        }
     }
 
-    fn path(&self, s: &Spec) -> Option<PathBuf> {
+    /// Returns true if every font of the form resolves to its own file (no fallback font).
+    pub fn complete(&self) -> bool {
+        Font::ALL.iter().all(|&f| self.locate(&spec(f)).is_some())
+    }
+
+    /// Where a font's file is: on disk, else (for the FL fonts) in memory.
+    fn locate(&self, s: &Spec) -> Option<Located> {
         match s.dir {
             Dir::Fl => self
                 .fl_fonts
                 .as_ref()
                 .map(|d| d.join(s.file))
-                .filter(|p| p.is_file()),
-            Dir::System => paths::system_font(s.file),
+                .filter(|p| p.is_file())
+                .map(Located::File)
+                .or_else(|| {
+                    self.embedded
+                        .iter()
+                        .find(|(name, _)| *name == s.file)
+                        .map(|&(_, data)| Located::Memory(data))
+                }),
+            Dir::System => paths::system_font(s.file).map(Located::File),
         }
     }
 
@@ -266,7 +291,14 @@ impl QfcText {
     fn entry(&mut self, font: Font) -> Option<&mut Entry> {
         if !self.fonts.contains_key(&font) {
             let s = spec(font);
-            let primary = self.path(&s).and_then(|p| self.source(p, 0));
+            let primary = match self.locate(&s) {
+                Some(Located::File(p)) => self.source(p, 0),
+                Some(Located::Memory(data)) => Some(Source {
+                    data: data.into(),
+                    index: 0,
+                }),
+                None => None,
+            };
             let fallback = self.fallbacks.first().cloned();
             let fallbacks = self.fallbacks.clone();
             // qfc:0x62c30: a face that does not load falls back to the first registered font.
@@ -366,3 +398,28 @@ const _: fn() = || {
     fn send<T: Send>() {}
     send::<QfcText>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Without an FL install, the FL fonts come from the embedded copies.
+    #[test]
+    fn embedded_fonts_stand_in_for_the_fl_install() {
+        let Some(dir) = paths::fonts() else { return };
+        let embedded: Vec<(&'static str, &'static [u8])> = backspin_presets::EDITOR_FONTS
+            .iter()
+            .filter_map(|&name| Some((name, &*std::fs::read(dir.join(name)).ok()?.leak())))
+            .collect();
+        let without = QfcText {
+            fl_fonts: None,
+            ..QfcText::new()
+        };
+        let with = QfcText {
+            fl_fonts: None,
+            ..QfcText::with_embedded(embedded)
+        };
+        assert!(!without.complete());
+        assert!(with.complete());
+    }
+}

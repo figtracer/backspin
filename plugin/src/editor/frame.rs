@@ -278,7 +278,10 @@ pub fn show(gui: &mut Gui, ui: &egui::Ui, cache: &mut FrameCache) {
         let (w, h) = (WIDTH, HEIGHT + SB_HEIGHT);
         let mut dib = Dib::new(w, h, PANEL);
         let mut guard = cache.text.lock();
-        let qfc = guard.get_or_insert_with(QfcText::new);
+        let qfc = guard.get_or_insert_with(|| {
+            let fonts = crate::sb::embedded().map(|p| p.fonts.clone());
+            QfcText::with_embedded(fonts.unwrap_or_default())
+        });
         let complete = qfc.complete();
         let mut text = Router {
             qfc,

@@ -204,6 +204,14 @@ fn from_db(root: &Path) -> Option<(Vec<Preset>, Vec<Group>)> {
     Some((all, groups))
 }
 
+/// The FL fonts the editor draws with (Arial comes from the system on both platforms).
+pub const EDITOR_FONTS: [&str; 4] = [
+    "ILGlyphsEx.ilfont",
+    "OpenSans-CondLight.ttf",
+    "OpenSans-Regular.ttf",
+    "Ubuntu-R.ttf",
+];
+
 /// Reads every preset of the local installs into a pack (for `cargo xtask preset-pack`).
 pub fn collect() -> Result<PackData, String> {
     let read = |p: &Preset| {
@@ -232,10 +240,20 @@ pub fn collect() -> Result<PackData, String> {
         .iter()
         .map(|g| (g.name.clone(), g.presets.iter().filter_map(index).collect()))
         .collect();
+    let dir = paths::fonts().ok_or("no FL Studio fonts folder")?;
+    let fonts = EDITOR_FONTS
+        .iter()
+        .map(|&name| {
+            std::fs::read(dir.join(name))
+                .map(|d| (name.to_string(), d))
+                .map_err(|e| format!("{name}: {e}"))
+        })
+        .collect::<Result<_, _>>()?;
     Ok(PackData {
         gross_beat,
         maps,
         shapes,
         groups,
+        fonts,
     })
 }
