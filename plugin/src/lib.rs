@@ -8,7 +8,6 @@
 mod decode;
 mod editor;
 mod params;
-mod paths;
 mod sb;
 mod shared;
 

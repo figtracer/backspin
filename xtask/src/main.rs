@@ -23,5 +23,30 @@ fn main() -> nih_plug_xtask::Result<()> {
         }
         return Ok(());
     }
+    if args.first().map(String::as_str) == Some("preset-pack") {
+        let out = args.get(1).map_or("target/presets.pack", String::as_str);
+        match backspin_presets::collect() {
+            Ok(pack) => {
+                let bytes = pack.encode();
+                if let Err(e) = std::fs::write(out, &bytes) {
+                    eprintln!("preset-pack: {out}: {e}");
+                    std::process::exit(1);
+                }
+                println!(
+                    "{out}: {} Gross Beat presets, {} maps, {} shape presets in {} groups, {} bytes",
+                    pack.gross_beat.len(),
+                    pack.maps.len(),
+                    pack.shapes.len(),
+                    pack.groups.len(),
+                    bytes.len()
+                );
+            }
+            Err(e) => {
+                eprintln!("preset-pack: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
     nih_plug_xtask::main()
 }

@@ -421,6 +421,7 @@ dependencies = [
  "arboard",
  "backspin-engine",
  "backspin-gfx",
+ "backspin-presets",
  "backspin-shaperbox",
  "backspin-ui",
  "image",
@@ -430,7 +431,6 @@ dependencies = [
  "png 0.17.16",
  "rfd",
  "rtrb 0.3.5",
- "rusqlite",
  "serde",
  "symphonia",
 ]
@@ -442,6 +442,10 @@ dependencies = [
  "cc",
  "cmake",
 ]
+
+[[package]]
+name = "backspin-clamp"
+version = "0.1.0"
 
 [[package]]
 name = "backspin-dsp"
@@ -469,6 +473,13 @@ version = "0.1.0"
 dependencies = [
  "backspin-agg2d",
  "png 0.17.16",
+]
+
+[[package]]
+name = "backspin-presets"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
 ]
 
 [[package]]
@@ -4421,6 +4432,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "backspin-engine",
+ "backspin-presets",
  "backspin-render",
  "clap-sys",
  "nih_plug_xtask",

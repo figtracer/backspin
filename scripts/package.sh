@@ -1,6 +1,7 @@
 #!/bin/sh
 # Builds the macOS installer: target/Backspin-<version>-<arch>.pkg installs Backspin.vst3 and
-# Backspin.clap into /Library/Audio/Plug-Ins. Honours CARGO_TARGET_DIR.
+# Backspin.clap into /Library/Audio/Plug-Ins, with the presets embedded. Honours CARGO_TARGET_DIR
+# and BACKSPIN_PRESET_PACK.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -10,6 +11,13 @@ target=${CARGO_TARGET_DIR:-target}
 work=$target/pkg
 plugins=$work/root/Library/Audio/Plug-Ins
 
+# Embed the presets of the local installs unless a pack is given.
+if [ -z "${BACKSPIN_PRESET_PACK:-}" ]; then
+    mkdir -p "$target"
+    cargo xtask preset-pack "$target/presets.pack"
+    BACKSPIN_PRESET_PACK=$(cd "$target" && pwd)/presets.pack
+    export BACKSPIN_PRESET_PACK
+fi
 cargo xtask bundle backspin --release
 
 rm -rf "$work"

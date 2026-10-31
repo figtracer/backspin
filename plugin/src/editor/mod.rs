@@ -90,12 +90,12 @@ pub struct Gui {
     /// The text shown in the hint area.
     pub hint: String,
     /// The local ShaperBox preset library, loaded on a background thread on first use.
-    pub sb_library: Arc<parking_lot::Mutex<Option<Vec<crate::sb::Pack>>>>,
+    pub sb_library: Arc<parking_lot::Mutex<Option<Vec<backspin_presets::Group>>>>,
     pub sb_loading: bool,
     /// The ShaperBox section: the pack shown, the loaded preset file, the selected shaper and
     /// band.
     pub sb_pack: usize,
-    pub sb_preset: Option<std::path::PathBuf>,
+    pub sb_preset: Option<backspin_presets::Source>,
     pub sb_selected: usize,
     pub sb_band: usize,
     /// The last Gross Beat preset loaded from the header.
@@ -1127,10 +1127,7 @@ mod snapshots {
         if list.len() < 3 {
             return;
         }
-        let names: Vec<String> = list
-            .iter()
-            .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
-            .collect();
+        let names: Vec<String> = list.iter().map(|p| p.name.clone()).collect();
         let mut gui = gui_with(None);
         gui.gb_preset = names[0].clone();
         let r = backspin_ui::sb::layout::GB_NEXT;

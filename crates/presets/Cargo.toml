@@ -1,0 +1,10 @@
+[package]
+name = "backspin-presets"
+description = "The presets Backspin reads at runtime: the local FL Studio and ShaperBox 3 installs, or the pack embedded in release builds."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }

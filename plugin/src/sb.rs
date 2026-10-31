@@ -1,12 +1,11 @@
 //! The ShaperBox section of the plugin: its persisted state, the processors handed to the audio
-//! thread, and the local preset library (ShaperBox 3's, read at runtime).
+//! thread, and the shape preset library.
 
 use backspin_shaperbox::graph::Processor;
 use backspin_shaperbox::state::State;
 use backspin_shaperbox::{Tree, Var, read_preset, write_preset};
 use parking_lot::Mutex;
 use rtrb::{Consumer, Producer, RingBuffer};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// The section's model: on or off, and the state tree.
@@ -100,8 +99,12 @@ impl Shared {
 
     /// Loads a preset file into the model and turns the section on.
     pub fn load_file(&self, path: &std::path::Path) -> Result<(), String> {
-        let data = std::fs::read(path).map_err(|e| e.to_string())?;
-        let tree = read_preset(&data)?;
+        self.load(&std::fs::read(path).map_err(|e| e.to_string())?)
+    }
+
+    /// Loads preset bytes into the model and turns the section on.
+    pub fn load(&self, data: &[u8]) -> Result<(), String> {
+        let tree = read_preset(data)?;
         {
             let mut m = self.model.lock();
             m.tree = Some(tree);
@@ -168,128 +171,21 @@ impl Audio {
     }
 }
 
-/// A preset of the local library.
-#[derive(Clone, Debug)]
-pub struct Preset {
-    pub name: String,
-    pub path: PathBuf,
+/// The presets embedded in release builds (empty in development builds).
+static PACK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/presets.pack"));
+
+/// The embedded preset pack, if this build has one.
+pub fn embedded() -> Option<&'static backspin_presets::Embedded> {
+    static DECODED: std::sync::OnceLock<Option<backspin_presets::Embedded>> =
+        std::sync::OnceLock::new();
+    DECODED
+        .get_or_init(|| backspin_presets::Embedded::decode(PACK))
+        .as_ref()
 }
 
-/// A pack of the library (`Category@Pack` in the plugin's database).
-#[derive(Clone, Debug)]
-pub struct Pack {
-    pub name: String,
-    pub presets: Vec<Preset>,
-}
-
-impl Pack {
-    /// The short name: the part after the category.
-    pub fn short(&self) -> &str {
-        self.name.rsplit('@').next().unwrap_or(&self.name)
-    }
-}
-
-/// The factory library: "All presets" first (every preset of `presets.db`), then its packs in
-/// the plugin's order. Without the database every preset file is read and listed under
-/// "All presets" only.
-pub fn library() -> Vec<Pack> {
-    let Some(root) = crate::paths::shape_library() else {
-        return Vec::new();
-    };
-    let (mut all, mut packs) = from_db(&root).unwrap_or_else(|| (scan(&root), Vec::new()));
-    all.sort_by_cached_key(|p| p.name.to_lowercase());
-    packs.insert(
-        0,
-        Pack {
-            name: "All presets".into(),
-            presets: all,
-        },
-    );
-    packs
-}
-
-/// Preset hash `h` is the file `h[0]/h[1]/h.dat`, if it is present.
-fn preset_path(root: &std::path::Path, hash: &str) -> Option<PathBuf> {
-    let mut c = hash.chars();
-    let (a, b) = (c.next()?, c.next()?);
-    let path = root
-        .join(a.to_string())
-        .join(b.to_string())
-        .join(format!("{hash}.dat"));
-    path.is_file().then_some(path)
-}
-
-/// Every preset of `presets.db` and its packs.
-fn from_db(root: &std::path::Path) -> Option<(Vec<Preset>, Vec<Pack>)> {
-    let db = rusqlite::Connection::open_with_flags(
-        root.join("presets.db"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .ok()?;
-    let rows = |sql: &str| -> Option<Vec<(String, String, String)>> {
-        let mut q = db.prepare(sql).ok()?;
-        let r = q
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .ok()?
-            .flatten()
-            .collect();
-        Some(r)
-    };
-    let all = rows("select '', hash, name from presets")?
-        .into_iter()
-        .filter_map(|(_, hash, name)| {
-            Some(Preset {
-                name,
-                path: preset_path(root, &hash)?,
-            })
-        })
-        .collect();
-    let mut packs: Vec<Pack> = Vec::new();
-    let positions = rows(
-        "select pp.pack, p.hash, p.name from pack_positions pp join presets p \
-         on p.hash = pp.preset order by pp.pack, pp.position",
-    )?;
-    for (pack, hash, name) in positions {
-        let Some(path) = preset_path(root, &hash) else {
-            continue;
-        };
-        let preset = Preset { name, path };
-        match packs.last_mut() {
-            Some(p) if p.name == pack => p.presets.push(preset),
-            _ => packs.push(Pack {
-                name: pack,
-                presets: vec![preset],
-            }),
-        }
-    }
-    Some((all, packs))
-}
-
-/// Every plain preset file under the library folder, with its program name.
-fn scan(root: &std::path::Path) -> Vec<Preset> {
-    let mut out = Vec::new();
-    for a in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        for b in std::fs::read_dir(a.path()).into_iter().flatten().flatten() {
-            for f in std::fs::read_dir(b.path()).into_iter().flatten().flatten() {
-                let path = f.path();
-                if path.extension().is_some_and(|e| e == "dat")
-                    && let Ok(data) = std::fs::read(&path)
-                    && let Ok(t) = read_preset(&data)
-                {
-                    let name = State::from_tree(&t).name;
-                    out.push(Preset {
-                        name: if name.is_empty() {
-                            "Untitled".into()
-                        } else {
-                            name
-                        },
-                        path,
-                    });
-                }
-            }
-        }
-    }
-    out
+/// The shape preset library: the local ShaperBox 3 library, else the embedded one.
+pub fn library() -> Vec<backspin_presets::Group> {
+    backspin_presets::shape_library(embedded())
 }
 
 /// Sets the `<type id=.. value=..>` leaf `id` of the shaper `k` in a state tree, adding it after
@@ -332,5 +228,19 @@ mod tests {
         assert!(lib.len() > 1, "no packs read from presets.db");
         assert!(all.presets.iter().any(|p| p.name == "Init"));
         eprintln!("{} presets in {} packs", all.presets.len(), lib.len() - 1);
+    }
+
+    /// The embedded pack (in builds with one) holds readable presets and valid groups.
+    #[test]
+    fn embedded_pack_reads() {
+        let Some(p) = embedded() else { return };
+        assert!(!p.gross_beat.is_empty() && !p.maps.is_empty());
+        for (name, data) in &p.shapes {
+            assert!(read_preset(data).is_ok(), "{name}");
+        }
+        for (name, items) in &p.groups {
+            assert!(items.iter().all(|&i| (i as usize) < p.shapes.len()), "{name}");
+        }
+        eprintln!("{} shape presets embedded", p.shapes.len());
     }
 }

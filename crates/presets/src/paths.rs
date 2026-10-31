@@ -1,6 +1,6 @@
-//! Where the local installs keep the files Backspin reads at runtime (it ships none of them):
-//! the FL Studio install (Gross Beat's maps, artwork and factory presets), the user's FL preset
-//! folder and the ShaperBox 3 preset library, on macOS and Windows.
+//! Where the local installs keep the files Backspin reads at runtime: the FL Studio install
+//! (Gross Beat's maps, artwork and factory presets), the user's FL preset folder and the
+//! ShaperBox 3 preset library, on macOS and Windows.
 
 use std::path::{Path, PathBuf};
 
@@ -55,17 +55,15 @@ pub fn gross_beat() -> PathBuf {
     in_fl("Plugins/Fruity/Effects/Gross Beat").unwrap_or_default()
 }
 
-/// The Gross Beat preset folders: the factory presets of the FL install, then the user's.
-pub fn preset_dirs() -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = in_fl("Data/Patches/Plugin presets/Effects/Gross Beat")
-        .into_iter()
-        .collect();
-    if let Some(h) = home() {
-        out.push(
-            h.join("Documents/Image-Line/FL Studio/Presets/Plugin presets/Effects/Gross Beat"),
-        );
-    }
-    out
+/// The factory Gross Beat state presets of the FL install.
+pub fn factory_presets() -> Option<PathBuf> {
+    in_fl("Data/Patches/Plugin presets/Effects/Gross Beat")
+}
+
+/// The user's own Gross Beat state presets.
+pub fn user_presets() -> Option<PathBuf> {
+    home()
+        .map(|h| h.join("Documents/Image-Line/FL Studio/Presets/Plugin presets/Effects/Gross Beat"))
 }
 
 /// The ShaperBox 3 preset library (`presets.db` and the preset files).

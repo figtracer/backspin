@@ -14,6 +14,15 @@ jobs:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Preset pack
+        # The presets the release embeds (cargo xtask preset-pack), kept out of git as an asset
+        # of the private preset-pack release.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download preset-pack -p backspin-presets.pack -D target
+          "BACKSPIN_PRESET_PACK=$PWD\target\backspin-presets.pack" >> $env:GITHUB_ENV
       - name: Test
         run: cargo test --workspace --exclude xtask --no-fail-fast
       - name: Bundle

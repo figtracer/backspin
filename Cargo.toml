@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/agg2d", "crates/envelope", "crates/dsp", "crates/engine", "crates/gfx", "crates/qfc", "crates/render", "crates/shaperbox", "crates/ui", "plugin", "xtask"]
+members = ["crates/agg2d", "crates/envelope", "crates/dsp", "crates/engine", "crates/gfx", "crates/presets", "crates/qfc", "crates/render", "crates/shaperbox", "crates/ui", "plugin", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,7 @@ backspin-agg2d = { path = "crates/agg2d" }
 backspin-dsp = { path = "crates/dsp" }
 backspin-engine = { path = "crates/engine" }
 backspin-gfx = { path = "crates/gfx" }
+backspin-presets = { path = "crates/presets" }
 backspin-qfc = { path = "crates/qfc" }
 backspin-envelope = { path = "crates/envelope" }
 backspin-render = { path = "crates/render" }

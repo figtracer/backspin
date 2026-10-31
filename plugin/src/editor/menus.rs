@@ -7,9 +7,9 @@ use crate::shared::Command;
 use backspin_engine::envelope::tools::{ToolError, parse_value, value_text};
 use backspin_engine::envelope::{Envelope, SHAPE_MENU};
 use backspin_engine::{PARAMS, fst_state};
+use backspin_presets::Preset;
 use nih_plug::prelude::ParamSetter;
 use nih_plug_egui::egui::{self, Button, Id, Pos2, Rect, Response, RichText, Ui, pos2};
-use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// A deferred edit of the slot's envelope.
@@ -53,13 +53,14 @@ pub fn options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Respon
         egui::PopupCloseBehavior::CloseOnClickOutside,
         |ui| {
             ui.set_min_width(230.0);
-            // Backspin addition: the presets are in the ShaperBox section's header.
+            // Backspin addition: the presets are in the shape section's header.
             if ui.button("Open preset file...").clicked() {
                 if let Some(p) = rfd::FileDialog::new()
                     .add_filter("Gross Beat preset", &["fst"])
                     .pick_file()
+                    && let Ok(data) = std::fs::read(&p)
                 {
-                    load_preset(gui, setter, &p);
+                    load_preset_bytes(gui, setter, &data);
                 }
                 ui.close_menu();
             }
@@ -165,34 +166,25 @@ pub fn wheel_menu(gui: &mut Gui, _ui: &mut Ui, setter: &ParamSetter, r: &Respons
     });
 }
 
-/// The factory state presets of the local FL install, then the user's own, sorted by name.
-pub fn state_presets() -> Vec<PathBuf> {
-    let dirs = crate::paths::preset_dirs();
-    let mut out = Vec::new();
-    for d in dirs {
-        let mut v: Vec<PathBuf> = std::fs::read_dir(d)
-            .map(|r| {
-                r.flatten()
-                    .map(|e| e.path())
-                    .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("fst")))
-                    .collect()
-            })
-            .unwrap_or_default();
-        v.sort();
-        out.extend(v);
-    }
-    out
+/// The Gross Beat state presets: the factory ones (the FL install's or the embedded ones), then
+/// the user's own.
+pub fn state_presets() -> Vec<Preset> {
+    backspin_presets::gross_beat_presets(crate::sb::embedded())
 }
 
 /// Loads a state preset: the model takes the new state, every slot and the options go to the
 /// audio engine, and the parameters go through the host.
-pub fn load_preset(gui: &mut Gui, setter: &ParamSetter, path: &std::path::Path) {
-    let Ok(data) = std::fs::read(path) else {
-        return;
-    };
-    let blob = match fst_state(&data) {
+pub fn load_preset(gui: &mut Gui, setter: &ParamSetter, preset: &Preset) {
+    if let Some(data) = preset.bytes() {
+        load_preset_bytes(gui, setter, &data);
+    }
+}
+
+/// Loads a state preset from its bytes (an `.fst` file or a bare state).
+pub fn load_preset_bytes(gui: &mut Gui, setter: &ParamSetter, data: &[u8]) {
+    let blob = match fst_state(data) {
         Ok(b) => b.to_vec(),
-        Err(_) => data,
+        Err(_) => data.to_vec(),
     };
     let mut new = backspin_engine::Engine::new();
     new.load_state(&blob);
@@ -229,22 +221,14 @@ pub fn load_preset(gui: &mut Gui, setter: &ParamSetter, path: &std::path::Path) 
     ];
 }
 
-/// The `.fnv` files of the Maps folder (the Presets submenu).
-fn presets() -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = std::fs::read_dir(crate::paths::gross_beat().join("Data/Maps"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("fnv")))
-        .collect();
-    v.sort();
-    v
+/// The envelope maps (the Presets submenu): the FL install's or the embedded ones.
+pub fn maps() -> Vec<Preset> {
+    backspin_presets::maps(crate::sb::embedded())
 }
 
 /// Loads a `.fnv` file into the edited envelope with the kind check bypassed (0x239070).
-fn load_fnv(gui: &mut Gui, path: &std::path::Path) {
-    if let Ok(data) = std::fs::read(path) {
+fn load_fnv(gui: &mut Gui, data: Option<std::borrow::Cow<'_, [u8]>>) {
+    if let Some(data) = data {
         let (g, i) = (gui.group(), gui.edited[gui.group()]);
         gui.edit_slot(g, i, false, |s| s.env.load_any(&data));
     }
@@ -275,16 +259,12 @@ pub fn env_options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Re
                 ui.vertical(|ui| {
                     ui.set_min_width(190.0);
                     title(ui, "State");
-                    let list = presets();
+                    let list = maps();
                     ui.add_enabled_ui(!list.is_empty(), |ui| {
                         ui.menu_button("Presets", |ui| {
                             for p in &list {
-                                let name = p
-                                    .file_stem()
-                                    .map(|s| s.to_string_lossy().into_owned())
-                                    .unwrap_or_default();
-                                if ui.button(name).clicked() {
-                                    load_fnv(gui, p);
+                                if ui.button(&p.name).clicked() {
+                                    load_fnv(gui, p.bytes());
                                     ui.close_menu();
                                 }
                             }
@@ -295,7 +275,7 @@ pub fn env_options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Re
                             .add_filter("Envelope state file", &["fnv"])
                             .pick_file()
                         {
-                            load_fnv(gui, &p);
+                            load_fnv(gui, std::fs::read(&p).ok().map(Into::into));
                         }
                         close = true;
                     }

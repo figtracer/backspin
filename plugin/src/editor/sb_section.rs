@@ -6,6 +6,7 @@ use super::Gui;
 use super::menus::{load_preset, state_presets};
 use super::paint::knob;
 use backspin_gfx::Rect as DRect;
+use backspin_presets::{Group, Preset};
 use backspin_shaperbox::state::State;
 use backspin_shaperbox::wave::{LENGTHS, Point, rate_hz, render_table};
 use backspin_ui::sb::ACCENT;
@@ -16,7 +17,6 @@ use nih_plug_egui::egui::{
     self, AboveOrBelow, Id, PointerButton, PopupCloseBehavior, Rect, Response, ScrollArea, Sense,
     Ui, pos2,
 };
-use std::path::{Path, PathBuf};
 
 /// The rack names in state order.
 const NAMES: [&str; 16] = [
@@ -90,7 +90,7 @@ pub fn model(gui: &Gui) -> SbModel {
                 let all = lib.as_ref()?.first()?;
                 all.presets
                     .iter()
-                    .find(|p| &p.path == path)
+                    .find(|p| &p.source == path)
                     .map(|p| p.name.clone())
             })
             .or_else(|| state.as_ref().map(|s| s.name.clone()))
@@ -175,22 +175,18 @@ fn list_popup(
     picked
 }
 
-fn stem(p: &Path) -> String {
-    p.file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default()
-}
-
-fn load_sb(gui: &mut Gui, path: &Path) {
-    if gui.shared.sb.load_file(path).is_ok() {
-        gui.sb_preset = Some(path.to_path_buf());
+fn load_sb(gui: &mut Gui, preset: &Preset) {
+    if let Some(data) = preset.bytes()
+        && gui.shared.sb.load(&data).is_ok()
+    {
+        gui.sb_preset = Some(preset.source.clone());
     }
 }
 
 /// The Gross Beat preset controls.
 fn gb_presets(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
     let list = state_presets();
-    let names: Vec<String> = list.iter().map(|p| stem(p)).collect();
+    let names: Vec<String> = list.iter().map(|p| p.name.clone()).collect();
     let current = names.iter().position(|n| *n == gui.gb_preset);
     let r = ui.interact(
         at(layout::GB_PRESET),
@@ -245,11 +241,11 @@ fn sb_presets(gui: &mut Gui, ui: &mut Ui) {
     if let Some(i) = list_popup(ui, &r, Id::new("sb_pack_popup"), &packs, Some(gui.sb_pack)) {
         gui.sb_pack = i;
     }
-    let presets: &[crate::sb::Preset] = lib.get(gui.sb_pack).map_or(&[], |p| &p.presets);
+    let presets: &[Preset] = lib.get(gui.sb_pack).map_or(&[], |p| &p.presets);
     let names: Vec<String> = presets.iter().map(|p| p.name.clone()).collect();
     let current = presets
         .iter()
-        .position(|p| Some(&p.path) == gui.sb_preset.as_ref());
+        .position(|p| Some(&p.source) == gui.sb_preset.as_ref());
     let r = ui.interact(at(layout::PRESET), Id::new("sb_preset"), Sense::click());
     if r.hovered() {
         gui.hint = "Shape preset".into();
@@ -271,8 +267,8 @@ fn sb_presets(gui: &mut Gui, ui: &mut Ui) {
         }
     }
     if let Some(i) = pick {
-        let path: PathBuf = presets[i].path.clone();
-        load_sb(gui, &path);
+        let preset = presets[i].clone();
+        load_sb(gui, &preset);
     }
     let r = ui.interact(at(layout::POWER), Id::new("sb_power"), Sense::click());
     if r.hovered() {
@@ -292,11 +288,11 @@ fn sb_presets(gui: &mut Gui, ui: &mut Ui) {
 }
 
 /// Loads the library's "Init" preset (every shaper off) so there is a state to edit.
-fn load_init(gui: &mut Gui, lib: &[crate::sb::Pack]) {
+fn load_init(gui: &mut Gui, lib: &[Group]) {
     let init = lib
         .first()
         .and_then(|p| p.presets.iter().find(|p| p.name == "Init"))
-        .map(|p| p.path.clone());
+        .cloned();
     if let Some(p) = init {
         load_sb(gui, &p);
     }

@@ -17,7 +17,6 @@ use nih_plug_egui::egui::{
     self, Color32, ColorImage, Context, Id, PointerButton, Rect, Sense, Slider, TextureHandle, Ui,
     pos2, vec2,
 };
-use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolKind {
@@ -90,8 +89,10 @@ fn default_kernel() -> Envelope {
             Point::new(0.5, 0.0, 0.0, 0),
         ],
     );
-    if let Ok(data) =
-        std::fs::read(crate::paths::gross_beat().join("Data/Maps/Env filter - default.fnv"))
+    if let Some(data) = super::menus::maps()
+        .iter()
+        .find(|p| p.name == "Env filter - default")
+        .and_then(|p| p.bytes())
     {
         k.load_any(&data);
     }
@@ -272,13 +273,9 @@ fn tool_dialog(gui: &mut Gui, ctx: &Context) {
                     ui.label("Impulse");
                     changed |= kernel_editor(ui, &mut d.kernel);
                     ui.menu_button("Presets", |ui| {
-                        for p in kernel_presets() {
-                            let name = p
-                                .file_stem()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_default();
-                            if ui.button(name).clicked() {
-                                if let Ok(data) = std::fs::read(&p) {
+                        for p in super::menus::maps() {
+                            if ui.button(&p.name).clicked() {
+                                if let Some(data) = p.bytes() {
                                     d.kernel.load_any(&data);
                                     changed = true;
                                 }
@@ -389,18 +386,6 @@ fn tool_dialog(gui: &mut Gui, ctx: &Context) {
     } else {
         gui.dialogs.tool = Some(t);
     }
-}
-
-fn kernel_presets() -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = std::fs::read_dir(crate::paths::gross_beat().join("Data/Maps"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("fnv")))
-        .collect();
-    v.sort();
-    v
 }
 
 /// The Filter impulse editor: a small envelope editor of length 1 (drag points vertically,
@@ -640,7 +625,8 @@ fn about(gui: &mut Gui, ctx: &Context) {
         return;
     }
     if gui.dialogs.about_image.is_none()
-        && let Some(img) = load_png(&crate::paths::gross_beat().join("Artwork/About.png"))
+        && let Some(img) =
+            load_png(&backspin_presets::paths::gross_beat().join("Artwork/About.png"))
     {
         gui.dialogs.about_image = Some(ctx.load_texture("about", img, Default::default()));
     }
