@@ -7,6 +7,7 @@ pub mod graph;
 pub mod shapers;
 pub mod smoother;
 pub mod state;
+pub mod trigger;
 pub mod valuetree;
 pub mod wave;
 

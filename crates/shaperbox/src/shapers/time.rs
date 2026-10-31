@@ -1,14 +1,9 @@
-//! Time (TimeShaperModulation::process 0x5634ac, sinc read 0x2e7348; shapers_a.md section 5):
-//! the delay from the wave, the windowed-sinc read head and the step crossfade (section 5.3).
+//! Time (TimeShaperModulation::process 0x5634ac; shapers_a.md section 5): the delay from the
+//! wave, the windowed-sinc read head ([`SincRing`]) and the step crossfade (section 5.3).
 
 use super::Wave;
+use super::ring::SincRing;
 
-const RING: usize = 1 << 21;
-const TAPS: usize = 63;
-/// The sinc table step (`DAT_01307250`) and its inverse (`DAT_01307254`).
-const SINC_STEP: f64 = 0.101_242_735_981_941_22;
-const SINC_SCALE: f64 = 9.877_251_625_061_035;
-const SINC_N: usize = 1025;
 /// At most this many crossfade segments per block (`mod+0xa0`).
 const MAX_SEGMENTS: usize = 8;
 
@@ -55,105 +50,29 @@ pub fn delay_seconds(r: f32, w: f32) -> f32 {
 /// One Time band: a ring of the input and a read head.
 pub struct TimeBand {
     sr: f32,
-    l: Vec<f32>,
-    r: Vec<f32>,
-    write: usize,
-    filled: usize,
+    ring: SincRing,
     prev_d: f64,
-    table: Vec<f64>,
 }
 
 impl TimeBand {
     pub fn new(sr: f32) -> Self {
-        let table = (0..SINC_N)
-            .map(|i| {
-                if i == 0 {
-                    1.0
-                } else {
-                    (i as f64 * SINC_STEP).sin() / (i as f64 * SINC_STEP)
-                }
-            })
-            .collect();
         Self {
             sr,
-            l: vec![0.0; RING],
-            r: vec![0.0; RING],
-            write: 0,
-            filled: 0,
+            ring: SincRing::new(),
             prev_d: 0.0,
-            table,
         }
-    }
-
-    fn sinc(&self, x: f64) -> f64 {
-        let a = x.abs() * SINC_SCALE;
-        let i = a as usize;
-        if i + 1 >= SINC_N {
-            return 0.0;
-        }
-        self.table[i] + (a - i as f64) * (self.table[i + 1] - self.table[i])
-    }
-
-    /// 0x2e7348: reads both channels `d` samples behind the current input sample. Taps past the
-    /// newest written sample read that sample; taps older than the filled part are dropped.
-    fn read_sinc(&self, d: f64, rate: f64, remaining: usize) -> [f32; 2] {
-        if d < 0.0 {
-            return [0.0; 2];
-        }
-        let base = self.write as f64 - remaining as f64;
-        let pos = base - d;
-        let ipos = pos.floor();
-        let oldest = self.write as i64 - (self.filled + 0x1f).min(RING) as i64;
-        if (ipos as i64) < oldest {
-            return [0.0; 2];
-        }
-        if d <= 9.999_999_747_378_752e-6 {
-            if remaining > 0 && remaining <= self.filled {
-                let k = (base - d) as i64 as usize & (RING - 1);
-                return [self.l[k], self.r[k]];
-            }
-            return [0.0; 2];
-        }
-        let mut cut = 0.9 / rate.abs().max(1.0);
-        if cut < 0.03125 {
-            cut = 1.0;
-        }
-        let frac = pos - ipos;
-        let half = (TAPS / 2) as i64;
-        let newest = self.write as i64 - 1;
-        let (mut al, mut ar) = (0.0f64, 0.0f64);
-        for k in 0..TAPS as i64 {
-            let idx = ipos as i64 + k - half;
-            if idx < oldest {
-                continue;
-            }
-            let t = (k - half) as f64 - frac;
-            let win = self
-                .sinc(2.0 * std::f64::consts::PI * (t + 1.0) / TAPS as f64)
-                .max(0.0);
-            let ker = cut * self.sinc(std::f64::consts::PI * cut * t) * win;
-            let j = idx.min(newest) as usize & (RING - 1);
-            al += ker * self.l[j] as f64;
-            ar += ker * self.r[j] as f64;
-        }
-        [al as f32, ar as f32]
     }
 
     /// `range` from `range_seconds`; `steps` is the crossfade input, `None` when the crossfade
     /// is off (constant wave, no steps, or a one-shot LFO not in Note timing).
     pub fn process(&mut self, buf: &mut [[f32; 2]], w: Wave, range: f32, steps: Option<Steps>) {
         let n = buf.len();
-        for f in buf.iter() {
-            self.l[self.write] = f[0];
-            self.r[self.write] = f[1];
-            self.write = (self.write + 1) & (RING - 1);
-        }
-        self.filled = (self.filled + n).min(RING);
+        self.ring.write(buf);
         match w {
             Wave::PerSample(ws) => {
                 for i in 0..n {
                     let d = (self.sr as f64 * delay_seconds(range, ws[i]) as f64).max(0.0);
-                    buf[i] = self.read_sinc(d, (self.prev_d - d) + 1.0, n - i);
+                    buf[i] = self.ring.read_sinc(d, (self.prev_d - d) + 1.0, n - i);
                     self.prev_d = d;
                 }
             }
@@ -162,12 +81,10 @@ impl TimeBand {
                 let k = (self.sr as f64 * delay_seconds(range, wc) as f64) as i64;
                 self.prev_d = k as f64;
                 for (i, f) in buf.iter_mut().enumerate() {
-                    let back = k + (n - i) as i64;
-                    *f = if back < 1 || back as usize > self.filled || k >= 0x1f_fe00 {
+                    *f = if k >= 0x1f_fe00 {
                         [0.0; 2]
                     } else {
-                        let j = (self.write as i64 - back) as usize & (RING - 1);
-                        [self.l[j], self.r[j]]
+                        self.ring.read_int(k, n - i)
                     };
                 }
             }
@@ -252,7 +169,7 @@ impl TimeBand {
             let rate = 1.0 - sr * f52 as f64;
             for i in sg.start.max(0)..sg.end.min(n as i32) {
                 let dsec = f52.mul_add(i as f32, c0).max(0.0);
-                let rr = self.read_sinc(sr * dsec as f64, rate, n - i as usize);
+                let rr = self.ring.read_sinc(sr * dsec as f64, rate, n - i as usize);
                 let x = (inv * (-sg.start) as f32 + inv * i as f32).clamp(0.0, 1.0);
                 let s = x * x * x.mul_add(-2.0, 3.0);
                 let o = &mut buf[i as usize];

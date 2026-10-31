@@ -32,14 +32,25 @@ pub const FALLBACK_ORDER: [usize; 13] = [0, 15, 9, 8, 2, 11, 1, 5, 3, 4, 7, 10, 
 /// The last root `version` that the "69" -> "70" migration (`FUN_0068fd68`) applies to.
 const RESONANCE_MIGRATION_VERSION: i32 = 69;
 
+/// The last root `version` whose `audioTriggering/algorithm` enum has four values (0..3): the
+/// plugin maps them to the current 0..2 by subtracting one [harness, core.md 5.1].
+const ALGORITHM_MIGRATION_VERSION: i32 = 56;
+
 /// One LFO (`LfoState`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lfo {
     pub points: Vec<Point>,
+    /// `timingMode`: 0 Beat, 1 Hz, 2 Note (the rate follows the last MIDI note).
     pub timing_mode: i32,
+    /// `triggerMode`: 0 synced to the transport, 1 retrigger (free-running, a trigger restarts
+    /// the phase), 2 one-shot (retrigger, stops at `one_shot_end_phase`).
     pub trigger_mode: i32,
+    /// `triggerSource`: 0 MIDI notes, 1 the audio trigger.
+    pub trigger_source: i32,
     pub length: i32,
     pub speed: f32,
+    /// `pitchOffset`: the Note timing transposition in semitones.
+    pub pitch_offset: f32,
     pub smoothing: f32,
     pub one_shot_end_phase: f32,
 }
@@ -50,11 +61,32 @@ impl Default for Lfo {
             points: Vec::new(),
             timing_mode: 0,
             trigger_mode: 0,
+            trigger_source: 0,
             length: 15,
             speed: 0.5,
+            pitch_offset: 0.0,
             smoothing: 0.4,
             one_shot_end_phase: 0.984_375,
         }
+    }
+}
+
+impl Lfo {
+    /// Whether the LFO reacts to triggers (`OscControllerShaperBoxLfo`, 0x2de93c): Note timing,
+    /// or a trigger mode other than synced.
+    pub fn free(&self) -> bool {
+        self.timing_mode == 2 || self.trigger_mode != 0
+    }
+
+    /// Whether the LFO is a one-shot (0x2de9a0): Note timing is never one-shot.
+    pub fn one_shot(&self) -> bool {
+        self.timing_mode != 2 && self.trigger_mode == 2
+    }
+
+    /// Whether the audio trigger drives this LFO (core.md 5.5): `triggerSource` 1 outside Note
+    /// timing. Note timing follows MIDI whatever the source.
+    pub fn audio_triggered(&self) -> bool {
+        self.free() && self.timing_mode != 2 && self.trigger_source == 1
     }
 }
 
@@ -157,6 +189,41 @@ pub struct Shaper {
     pub bands: [Band; 3],
 }
 
+/// The audio trigger (`AudioTriggerState[audioTriggering]`, core.md 5.1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AudioTrigger {
+    /// `active`: the detector runs. Its latency applies whenever a section listens to it.
+    pub active: bool,
+    /// `useSidechain`: analyse input bus 1 instead of the main input.
+    pub use_sidechain: bool,
+    /// `hpCutoff` (0 is off) and `lpCutoff` (1 is off) of the detector input.
+    pub hp_cutoff: f32,
+    pub lp_cutoff: f32,
+    /// `threshold`: the minimum peak input amplitude of an onset.
+    pub threshold: f32,
+    /// `detail`: the flux threshold.
+    pub detail: f32,
+    /// `delay` ("Trigger Shift"): the trigger is delayed by `delay * 8 ms`.
+    pub delay: f32,
+    /// `algorithm`: 0 two bands, 1 three bands, 2 eight bands.
+    pub algorithm: i32,
+}
+
+impl Default for AudioTrigger {
+    fn default() -> Self {
+        Self {
+            active: false,
+            use_sidechain: false,
+            hp_cutoff: 0.2,
+            lp_cutoff: 1.0,
+            threshold: 0.088_388_35,
+            detail: 0.5,
+            delay: 0.5,
+            algorithm: 0,
+        }
+    }
+}
+
 /// The whole state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
@@ -168,6 +235,14 @@ pub struct State {
     /// `useConstantBaseLatency` (default true): the output always runs 16 samples late (core.md
     /// section 1); off, it runs late by the latency of the shapers only (Drive's 16).
     pub use_constant_base_latency: bool,
+    /// `triggerSmoothing` (default true): ramps at every LFO trigger (core.md 5.5).
+    pub trigger_smoothing: bool,
+    /// `fireWavesViaMidi` (default false): the pitch classes C#..B select waves instead of
+    /// triggering; only C triggers.
+    pub fire_waves_via_midi: bool,
+    /// `MidiState[midi]/inChannel`: 0 all channels, else the channel 1..16 that triggers.
+    pub midi_in_channel: i32,
+    pub audio_trigger: AudioTrigger,
 }
 
 impl Default for State {
@@ -179,6 +254,10 @@ impl Default for State {
             master_mix: 1.0,
             bypassed: false,
             use_constant_base_latency: true,
+            trigger_smoothing: true,
+            fire_waves_via_midi: false,
+            midi_in_channel: 0,
+            audio_trigger: AudioTrigger::default(),
         }
     }
 }
@@ -239,8 +318,10 @@ fn lfo(t: &Tree) -> Lfo {
         points,
         timing_mode: i(t, "timingMode", d.timing_mode),
         trigger_mode: i(t, "triggerMode", d.trigger_mode),
+        trigger_source: i(t, "triggerSource", d.trigger_source),
         length: i(t, "length", d.length),
         speed: f(t, "speed", d.speed),
+        pitch_offset: f(t, "pitchOffset", d.pitch_offset),
         smoothing: f(t, "smoothing", d.smoothing),
         one_shot_end_phase: f(t, "oneShotEndPhase", d.one_shot_end_phase),
     }
@@ -339,6 +420,22 @@ impl State {
                 "useConstantBaseLatency" => {
                     s.use_constant_base_latency = b(t, "useConstantBaseLatency", true);
                 }
+                "triggerSmoothing" => s.trigger_smoothing = b(t, "triggerSmoothing", true),
+                "fireWavesViaMidi" => s.fire_waves_via_midi = b(t, "fireWavesViaMidi", false),
+                "midi" => s.midi_in_channel = i(c, "inChannel", 0),
+                "audioTriggering" => {
+                    let d = AudioTrigger::default();
+                    s.audio_trigger = AudioTrigger {
+                        active: b(c, "active", d.active),
+                        use_sidechain: b(c, "useSidechain", d.use_sidechain),
+                        hp_cutoff: f(c, "hpCutoff", d.hp_cutoff),
+                        lp_cutoff: f(c, "lpCutoff", d.lp_cutoff),
+                        threshold: f(c, "threshold", d.threshold),
+                        detail: f(c, "detail", d.detail),
+                        delay: f(c, "delay", d.delay),
+                        algorithm: i(c, "algorithm", d.algorithm),
+                    };
+                }
                 _ => {}
             }
         }
@@ -349,6 +446,9 @@ impl State {
         };
         if version.is_some_and(|v| v <= RESONANCE_MIGRATION_VERSION) {
             s.migrate_resonance();
+        }
+        if version.is_some_and(|v| v <= ALGORITHM_MIGRATION_VERSION) {
+            s.audio_trigger.algorithm = (s.audio_trigger.algorithm - 1).max(0);
         }
         s
     }

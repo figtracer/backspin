@@ -1,9 +1,10 @@
 //! Renders the ShaperBox section with the flags of the offline host for the real plugin
 //! (`.amp/in/sb/harness`), so the two can be compared sample by sample:
 //! `sbrender --state preset.dat [--gen noise|sine:HZ|ramp|impulse:P --seconds S | --input in.wav]
-//!  --output out.wav [--tempo 120] [--sr 48000] [--block 512] [--pos BEATS]`
+//!  --output out.wav [--tempo 120] [--sr 48000] [--block 512] [--pos BEATS] [--sidechain sc.wav]
+//!  [--note TIME:NOTE:on|off[:VEL] ...]` (TIME in samples, `0.5s` or `2b`).
 
-use backspin_shaperbox::graph::{Processor, Transport};
+use backspin_shaperbox::graph::{NoteEvent, Processor, Transport};
 use backspin_shaperbox::read_preset;
 use backspin_shaperbox::state::State;
 
@@ -98,18 +99,68 @@ fn main() {
         }
         _ => panic!("--input or --gen"),
     };
+    let sidechain = get("--sidechain").map(|p| read_wav(&p));
+    // `--note TIME:NOTE:on|off[:VEL]` as the harness takes it; a velocity of 0 is a note-off.
+    let time = |s: &str| -> usize {
+        if let Some(v) = s.strip_suffix('s') {
+            (v.parse::<f64>().unwrap() * sr).round() as usize
+        } else if let Some(v) = s.strip_suffix('b') {
+            (v.parse::<f64>().unwrap() * 60.0 / tempo * sr).round() as usize
+        } else {
+            s.parse().unwrap()
+        }
+    };
+    let notes: Vec<(usize, NoteEvent)> = a
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| *x == "--note")
+        .map(|(i, _)| {
+            let p: Vec<&str> = a[i + 1].split(':').collect();
+            let vel: u32 = p.get(3).map_or(100, |v| v.parse().unwrap());
+            let e = NoteEvent {
+                offset: 0,
+                channel: 0,
+                note: p[1].parse().unwrap(),
+                on: p[2] == "on" && vel > 0,
+            };
+            (time(p[0]), e)
+        })
+        .collect();
     let mut p = Processor::new(state, sr as f32);
+    let mut events = Vec::new();
     let mut start = 0;
     while start < buf.len() {
         let n = block.min(buf.len() - start);
         let beats = pos + start as f64 / sr * tempo / 60.0;
-        p.process(
+        events.clear();
+        events.extend(
+            notes
+                .iter()
+                .filter(|(t, _)| (start..start + n).contains(t))
+                .map(|(t, e)| NoteEvent {
+                    offset: t - start,
+                    ..*e
+                }),
+        );
+        let sc = sidechain.as_ref().map(|s| {
+            let end = (start + n).min(s.len());
+            &s[start.min(end)..end]
+        });
+        // A short sidechain file is silent past its end.
+        let sc_full: Option<Vec<[f32; 2]>> = sc.map(|s| {
+            let mut v = s.to_vec();
+            v.resize(n, [0.0; 2]);
+            v
+        });
+        p.process_with_events(
             &mut buf[start..start + n],
             Transport {
                 ppq: beats,
                 bpm: tempo,
                 playing: true,
             },
+            sc_full.as_deref(),
+            &events,
         );
         start += n;
     }
