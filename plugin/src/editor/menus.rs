@@ -53,7 +53,19 @@ pub fn options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Respon
         egui::PopupCloseBehavior::CloseOnClickOutside,
         |ui| {
             ui.set_min_width(230.0);
-            // Backspin addition: the presets are in the shape section's header.
+            // Backspin addition: the host's preset list of the original, flat (a submenu in
+            // this popup would close the popup before its click lands).
+            title(ui, "Presets");
+            for p in state_presets() {
+                if ui
+                    .selectable_label(p.name == gui.gb_preset, &p.name)
+                    .clicked()
+                {
+                    load_preset(gui, setter, &p);
+                    gui.gb_preset = p.name.clone();
+                    ui.close_menu();
+                }
+            }
             if ui.button("Open preset file...").clicked() {
                 if let Some(p) = rfd::FileDialog::new()
                     .add_filter("Gross Beat preset", &["fst"])

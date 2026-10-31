@@ -1120,23 +1120,26 @@ mod snapshots {
         ]
     }
 
-    /// One click on the next arrow steps one Gross Beat preset.
+    /// One click on the next arrow steps one shape preset of the shown group.
     #[test]
     fn preset_arrow_steps_once() {
-        let list = super::menus::state_presets();
-        if list.len() < 3 {
+        let lib = crate::sb::library();
+        let Some(group) = lib.iter().position(|g| g.presets.len() >= 3) else {
             return;
-        }
-        let names: Vec<String> = list.iter().map(|p| p.name.clone()).collect();
+        };
+        let presets = lib[group].presets.clone();
         let mut gui = gui_with(None);
-        gui.gb_preset = names[0].clone();
-        let r = backspin_ui::sb::layout::GB_NEXT;
+        *gui.sb_library.lock() = Some(lib);
+        gui.sb_loading = true;
+        gui.sb_pack = group;
+        gui.sb_preset = Some(presets[0].source.clone());
+        let r = backspin_ui::sb::layout::NEXT;
         let at = pos2(
             (r.x0 + r.x1) as f32 * 0.5,
             ((r.y0 + r.y1) / 2 + backspin_ui::HEIGHT) as f32,
         );
         click_frames(&mut gui, click(at));
-        assert_eq!(gui.gb_preset, names[1]);
+        assert_eq!(gui.sb_preset, Some(presets[1].source.clone()));
     }
 
     /// Runs one frame in `ctx` and returns how many textures it created or updated.

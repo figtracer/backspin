@@ -1,22 +1,23 @@
-//! The shape section under the Gross Beat form (the per-band shapers): the preset header (Gross
-//! Beat and shape presets), the mix knob, the shaper rack, the band tabs and the wave view. The painters are
-//! `backspin_ui::sb`; this module builds their model and handles input on the same rects.
+//! The shape section under the Gross Beat form: the shaper rack, Clamp's knobs and meter, the
+//! shape bar with its mix knob, the band tabs, the wave view and the bottom row (the shape
+//! preset, Clamp's toggle and combos). The painters are `backspin_ui::sb`; this module builds
+//! their model, handles input on the same rects and draws the live parts (knobs, meter).
 
 use super::Gui;
-use super::menus::{load_preset, state_presets};
 use super::paint::knob;
+use crate::params::{CLAMP_MODES, CLAMP_OVERSAMPLING, CLAMP_TYPES};
 use backspin_gfx::Rect as DRect;
 use backspin_presets::{Group, Preset};
 use backspin_shaperbox::state::State;
 use backspin_shaperbox::wave::{LENGTHS, Point, rate_hz, render_table};
-use backspin_ui::sb::ACCENT;
-use backspin_ui::sb::layout;
+use backspin_ui::sb::{ACCENT, layout};
 use backspin_ui::{HEIGHT, SbModel, ShaperCell};
-use nih_plug::prelude::ParamSetter;
+use nih_plug::prelude::{FloatParam, IntParam, Param, ParamSetter};
 use nih_plug_egui::egui::{
-    self, AboveOrBelow, Id, PointerButton, PopupCloseBehavior, Rect, Response, ScrollArea, Sense,
-    Ui, pos2,
+    self, AboveOrBelow, Color32, Id, PointerButton, PopupCloseBehavior, Rect, Response, ScrollArea,
+    Sense, Ui, pos2,
 };
+use std::sync::atomic::Ordering;
 
 /// The rack names in state order.
 const NAMES: [&str; 16] = [
@@ -35,6 +36,10 @@ fn at(r: DRect) -> Rect {
         pos2(r.x0 as f32, (r.y0 + HEIGHT) as f32),
         pos2(r.x1 as f32, (r.y1 + HEIGHT) as f32),
     )
+}
+
+fn colour(c: u32) -> Color32 {
+    Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }
 
 /// Starts loading the preset library on a background thread on first use.
@@ -61,43 +66,41 @@ fn length_text(length: i32) -> String {
     }
 }
 
+/// The name of the loaded shape preset: the library's when it came from there, else the
+/// state's program name.
+fn preset_name(gui: &Gui, state: Option<&State>) -> String {
+    let lib = gui.sb_library.lock();
+    gui.sb_preset
+        .as_ref()
+        .and_then(|src| {
+            let all = lib.as_ref()?.first()?;
+            all.presets
+                .iter()
+                .find(|p| &p.source == src)
+                .map(|p| p.name.clone())
+        })
+        .or_else(|| state.map(|s| s.name.clone()))
+        .unwrap_or_else(|| "(none)".into())
+}
+
 /// The painters' model.
 pub fn model(gui: &Gui) -> SbModel {
     let (enabled, state) = {
         let m = gui.shared.sb.model.lock();
         (m.enabled, m.tree.as_ref().map(State::from_tree))
     };
-    let lib = gui.sb_library.lock();
-    let pack = match lib.as_ref() {
-        None => "loading...".to_string(),
-        Some(l) if l.len() <= 1 && l.first().is_none_or(|p| p.presets.is_empty()) => {
-            "not installed".to_string()
-        }
-        Some(l) => l
-            .get(gui.sb_pack)
-            .map(|p| p.short().to_string())
-            .unwrap_or_default(),
-    };
+    let c = &gui.params.clamp;
+    let item = |list: &[&str], v: i32| list[v.clamp(0, list.len() as i32 - 1) as usize].to_string();
     let mut out = SbModel {
         enabled,
-        gb_preset: gui.gb_preset.clone(),
-        pack,
-        // The library's name when the preset came from it, else the state's program name.
-        preset: gui
-            .sb_preset
-            .as_ref()
-            .and_then(|path| {
-                let all = lib.as_ref()?.first()?;
-                all.presets
-                    .iter()
-                    .find(|p| &p.source == path)
-                    .map(|p| p.name.clone())
-            })
-            .or_else(|| state.as_ref().map(|s| s.name.clone()))
-            .unwrap_or_else(|| "(none)".into()),
+        preset: preset_name(gui, state.as_ref()),
         selected: gui.sb_selected,
         band: gui.sb_band,
         bands_active: [false, true, false],
+        clamp_on: c.on.value(),
+        clamp_type: ["A", "B"][c.kind.value().clamp(0, 1) as usize].into(),
+        clamp_mode: item(&CLAMP_MODES, c.mode.value()),
+        clamp_oversampling: item(&CLAMP_OVERSAMPLING, c.oversampling.value()),
         ..Default::default()
     };
     out.shapers = (0..16)
@@ -109,14 +112,13 @@ pub fn model(gui: &Gui) -> SbModel {
         })
         .collect();
     let Some(s) = state else {
-        out.info = format!("{}: no preset loaded", NAMES[gui.sb_selected]);
         return out;
     };
     let k = gui.sb_selected;
     out.bands_active = bands_active(&s, k);
     let band = &s.shapers[k].bands[gui.sb_band];
-    let mut info = format!(
-        "{} \u{b7} {} band \u{b7} mix {:.0}%",
+    let mut readout = format!(
+        "{} {} \u{b7} mix {:.0}%",
         NAMES[k],
         BANDS[gui.sb_band],
         band.mix * 100.0
@@ -136,39 +138,38 @@ pub fn model(gui: &Gui) -> SbModel {
         } else {
             length_text(lfo.length)
         };
-        info = format!("{info} \u{b7} {} \u{b7} {timing}", sec.id);
+        readout = format!("{readout} \u{b7} {timing}");
     }
     if !PORTED.contains(&k) {
-        info.push_str(" \u{b7} not available yet");
+        readout.push_str(" \u{b7} not available yet");
     }
-    out.info = info;
+    out.readout = readout;
     out
 }
 
-/// A single-level popup list under `r`: returns the clicked index.
-fn list_popup(
-    ui: &Ui,
-    r: &Response,
-    id: Id,
-    items: &[String],
-    current: Option<usize>,
-) -> Option<usize> {
+/// Opens or closes popup `id` on a click of `r` and shows it above `r` (the section is at the
+/// bottom of the window); returns what `add` returns while it is open.
+fn popup_above<R>(ui: &Ui, r: &Response, id: Id, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     if r.clicked() {
         ui.memory_mut(|m| m.toggle_popup(id));
     }
-    let mut picked = None;
-    // Upward: the section is at the bottom of the window.
     let close = PopupCloseBehavior::CloseOnClickOutside;
-    egui::popup_above_or_below_widget(ui, id, r, AboveOrBelow::Above, close, |ui| {
-        ui.set_min_width(r.rect.width().max(200.0));
-        ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-            for (i, it) in items.iter().enumerate() {
-                if ui.selectable_label(Some(i) == current, it).clicked() {
-                    picked = Some(i);
-                }
+    egui::popup_above_or_below_widget(ui, id, r, AboveOrBelow::Above, close, add)
+}
+
+/// A single-level list popup: returns the clicked index.
+fn list_popup(ui: &Ui, r: &Response, id: Id, items: &[&str], current: usize) -> Option<usize> {
+    let picked = popup_above(ui, r, id, |ui| {
+        ui.set_min_width(r.rect.width().max(90.0));
+        let mut picked = None;
+        for (i, it) in items.iter().enumerate() {
+            if ui.selectable_label(i == current, *it).clicked() {
+                picked = Some(i);
             }
-        });
-    });
+        }
+        picked
+    })
+    .flatten();
     if picked.is_some() {
         ui.memory_mut(|m| m.close_popup());
     }
@@ -183,74 +184,70 @@ fn load_sb(gui: &mut Gui, preset: &Preset) {
     }
 }
 
-/// The Gross Beat preset controls.
-fn gb_presets(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
-    let list = state_presets();
-    let names: Vec<String> = list.iter().map(|p| p.name.clone()).collect();
-    let current = names.iter().position(|n| *n == gui.gb_preset);
-    let r = ui.interact(
-        at(layout::GB_PRESET),
-        Id::new("sb_gb_preset"),
-        Sense::click(),
-    );
-    if r.hovered() {
-        gui.hint = "Gross Beat preset".into();
-    }
-    let mut pick = list_popup(ui, &r, Id::new("sb_gb_preset_popup"), &names, current);
-    for (rect, step, id) in [
-        (layout::GB_PREV, -1, "sb_gb_prev"),
-        (layout::GB_NEXT, 1, "sb_gb_next"),
-    ] {
-        let r = ui.interact(at(rect), Id::new(id), Sense::click());
-        if r.hovered() {
-            gui.hint = if step < 0 {
-                "Previous preset"
-            } else {
-                "Next preset"
-            }
-            .into();
-        }
-        if r.clicked() && !list.is_empty() {
-            let n = list.len() as i32;
-            pick = Some(current.map_or(0, |c| (c as i32 + step).rem_euclid(n)) as usize);
-        }
-    }
-    if let Some(i) = pick {
-        load_preset(gui, setter, &list[i]);
-        gui.gb_preset = names[i].clone();
+/// Loads the library's "Init" preset (every shaper off) so there is a state to edit.
+fn load_init(gui: &mut Gui, lib: &[Group]) {
+    let init = lib
+        .first()
+        .and_then(|p| p.presets.iter().find(|p| p.name == "Init"))
+        .cloned();
+    if let Some(p) = init {
+        load_sb(gui, &p);
     }
 }
 
-/// The ShaperBox pack and preset controls and the section's power toggle.
-fn sb_presets(gui: &mut Gui, ui: &mut Ui) {
+/// The shape preset: a two-column picker (groups, then the group's presets) above the combo,
+/// with previous and next stepping through the shown group.
+fn presets(gui: &mut Gui, ui: &mut Ui) {
     let lib = gui.sb_library.lock().clone().unwrap_or_default();
-    let packs: Vec<String> = lib
-        .iter()
-        .map(|p| {
-            format!(
-                "{}  ({})",
-                p.name.replace('@', " \u{203a} "),
-                p.presets.len()
-            )
-        })
-        .collect();
-    let r = ui.interact(at(layout::PACK), Id::new("sb_pack"), Sense::click());
-    if r.hovered() {
-        gui.hint = "Shape preset pack".into();
-    }
-    if let Some(i) = list_popup(ui, &r, Id::new("sb_pack_popup"), &packs, Some(gui.sb_pack)) {
-        gui.sb_pack = i;
-    }
-    let presets: &[Preset] = lib.get(gui.sb_pack).map_or(&[], |p| &p.presets);
-    let names: Vec<String> = presets.iter().map(|p| p.name.clone()).collect();
-    let current = presets
-        .iter()
-        .position(|p| Some(&p.source) == gui.sb_preset.as_ref());
     let r = ui.interact(at(layout::PRESET), Id::new("sb_preset"), Sense::click());
     if r.hovered() {
         gui.hint = "Shape preset".into();
     }
-    let mut pick = list_popup(ui, &r, Id::new("sb_preset_popup"), &names, current);
+    let group = gui.sb_pack.min(lib.len().saturating_sub(1));
+    let shown = lib.get(group).and_then(|g| {
+        g.presets
+            .iter()
+            .position(|p| Some(&p.source) == gui.sb_preset.as_ref())
+    });
+    let mut pick: Option<(usize, usize)> = None;
+    let mut show_group = None;
+    popup_above(ui, &r, Id::new("sb_preset_popup"), |ui| {
+        ui.horizontal_top(|ui| {
+            ScrollArea::vertical()
+                .id_salt("sb_groups")
+                .max_height(420.0)
+                .show(ui, |ui| {
+                    ui.set_width(190.0);
+                    for (g, grp) in lib.iter().enumerate() {
+                        let label = format!(
+                            "{}  ({})",
+                            grp.name.replace('@', " \u{203a} "),
+                            grp.presets.len()
+                        );
+                        if ui.selectable_label(g == group, label).clicked() {
+                            show_group = Some(g);
+                        }
+                    }
+                });
+            ui.separator();
+            ScrollArea::vertical()
+                .id_salt("sb_group_presets")
+                .max_height(420.0)
+                .show(ui, |ui| {
+                    ui.set_width(220.0);
+                    if let Some(grp) = lib.get(group) {
+                        for (i, p) in grp.presets.iter().enumerate() {
+                            if ui.selectable_label(Some(i) == shown, &p.name).clicked() {
+                                pick = Some((group, i));
+                            }
+                        }
+                    }
+                });
+        });
+    });
+    if let Some(g) = show_group {
+        gui.sb_pack = g;
+    }
     for (rect, step, id) in [(layout::PREV, -1, "sb_prev"), (layout::NEXT, 1, "sb_next")] {
         let r = ui.interact(at(rect), Id::new(id), Sense::click());
         if r.hovered() {
@@ -261,40 +258,21 @@ fn sb_presets(gui: &mut Gui, ui: &mut Ui) {
             }
             .into();
         }
-        if r.clicked() && !presets.is_empty() {
-            let n = presets.len() as i32;
-            pick = Some(current.map_or(0, |c| (c as i32 + step).rem_euclid(n)) as usize);
+        if r.clicked()
+            && let Some(grp) = lib.get(group)
+            && !grp.presets.is_empty()
+        {
+            let n = grp.presets.len() as i32;
+            pick = Some((
+                group,
+                shown.map_or(0, |c| (c as i32 + step).rem_euclid(n)) as usize,
+            ));
         }
     }
-    if let Some(i) = pick {
-        let preset = presets[i].clone();
+    if let Some((g, i)) = pick {
+        ui.memory_mut(|m| m.close_popup());
+        let preset = lib[g].presets[i].clone();
         load_sb(gui, &preset);
-    }
-    let r = ui.interact(at(layout::POWER), Id::new("sb_power"), Sense::click());
-    if r.hovered() {
-        gui.hint = "Shapes on/off".into();
-    }
-    if r.clicked() {
-        let (enabled, has_tree) = {
-            let m = gui.shared.sb.model.lock();
-            (m.enabled, m.tree.is_some())
-        };
-        if !has_tree {
-            load_init(gui, &lib);
-        } else {
-            gui.shared.sb.set_enabled(!enabled);
-        }
-    }
-}
-
-/// Loads the library's "Init" preset (every shaper off) so there is a state to edit.
-fn load_init(gui: &mut Gui, lib: &[Group]) {
-    let init = lib
-        .first()
-        .and_then(|p| p.presets.iter().find(|p| p.name == "Init"))
-        .cloned();
-    if let Some(p) = init {
-        load_sb(gui, &p);
     }
 }
 
@@ -356,10 +334,9 @@ fn rack(gui: &mut Gui, ui: &mut Ui) {
         row * layout::COLS as usize + c
     };
     if let Some(p) = resp.hover_pos() {
-        let k = cell(p);
         gui.hint = format!(
             "{}: click to select, double-click to turn on or off",
-            NAMES[k]
+            NAMES[cell(p)]
         );
     }
     if resp.clicked()
@@ -374,14 +351,14 @@ fn rack(gui: &mut Gui, ui: &mut Ui) {
     }
     let b = at(layout::BANDS);
     let resp = ui.interact(b, Id::new("sb_bands"), Sense::click());
+    let band_at = |p: egui::Pos2| (((p.y - b.min.y) / 27.0) as usize).min(2);
     if let Some(p) = resp.hover_pos() {
-        let i = (((p.y - b.min.y) / 27.0) as usize).min(2);
-        gui.hint = format!("Show the {} band", BANDS[i]);
+        gui.hint = format!("Show the {} band", BANDS[band_at(p)]);
     }
     if resp.clicked()
         && let Some(p) = resp.interact_pointer_pos()
     {
-        let i = (((p.y - b.min.y) / 27.0) as usize).min(2);
+        let i = band_at(p);
         let active = {
             let m = gui.shared.sb.model.lock();
             m.tree
@@ -424,15 +401,190 @@ fn toggle_shaper(gui: &mut Gui, k: usize) {
     gui.select_shaper(k);
 }
 
-/// Input for the whole section.
-pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
-    ensure_library(gui);
-    gb_presets(gui, ui, setter);
-    sb_presets(gui, ui);
-    rack(gui, ui);
-    mix_knob(gui, ui);
+/// A knob bound to a float parameter: vertical drag (Ctrl finer), wheel, double-click resets.
+#[allow(clippy::too_many_arguments)]
+fn param_knob(
+    gui: &mut Gui,
+    ui: &mut Ui,
+    setter: &ParamSetter,
+    p: &FloatParam,
+    r: DRect,
+    id: &str,
+    hint: &str,
+    step: f32,
+    on: bool,
+) {
+    let r = at(r);
+    let resp = ui.interact(r, Id::new(id), Sense::click_and_drag());
+    let norm = p.unmodulated_normalized_value();
+    if resp.drag_started_by(PointerButton::Primary) {
+        setter.begin_set_parameter(p);
+    }
+    if resp.dragged_by(PointerButton::Primary) {
+        let fine = ui.input(|i| i.modifiers.command);
+        let d = -resp.drag_delta().y / if fine { 16.0 } else { 1.0 } / 200.0;
+        setter.set_parameter_normalized(p, (norm + d).clamp(0.0, 1.0));
+    }
+    if resp.drag_stopped_by(PointerButton::Primary) {
+        setter.end_set_parameter(p);
+    }
+    if resp.double_clicked() {
+        setter.begin_set_parameter(p);
+        setter.set_parameter(p, p.default_plain_value());
+        setter.end_set_parameter(p);
+    }
+    if resp.hovered() {
+        let scroll = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll != 0.0 {
+            let v = p.value() + if scroll > 0.0 { step } else { -step };
+            setter.begin_set_parameter(p);
+            setter.set_parameter(p, v);
+            setter.end_set_parameter(p);
+        }
+        gui.hint = format!("{hint}: {}", p.normalized_value_to_string(norm, true));
+    }
+    let fill = if on { colour(ACCENT) } else { colour(0x5d6b74) };
+    // The gains are centred at 0 dB like the TNS knob; ceiling and softness fill from the left.
+    let centred = p.preview_normalized(0.0) > 0.0 && p.preview_normalized(0.0) < 1.0;
+    knob(ui.painter(), r, norm, fill, centred, false, resp.dragged());
 }
 
-fn colour(c: u32) -> egui::Color32 {
-    egui::Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
+/// A combo bound to an int parameter, with its items in a popup above it.
+#[allow(clippy::too_many_arguments)]
+fn param_combo(
+    gui: &mut Gui,
+    ui: &mut Ui,
+    setter: &ParamSetter,
+    p: &IntParam,
+    r: DRect,
+    id: &str,
+    hint: &str,
+    items: &[&str],
+) {
+    let resp = ui.interact(at(r), Id::new(id), Sense::click());
+    let last = items.len() as i32 - 1;
+    if resp.hovered() {
+        gui.hint = hint.into();
+        let scroll = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll != 0.0 {
+            let v = (p.value() + if scroll > 0.0 { -1 } else { 1 }).clamp(0, last);
+            setter.begin_set_parameter(p);
+            setter.set_parameter(p, v);
+            setter.end_set_parameter(p);
+        }
+    }
+    let current = p.value().clamp(0, last) as usize;
+    if let Some(i) = list_popup(ui, &resp, Id::new((id, "popup")), items, current) {
+        setter.begin_set_parameter(p);
+        setter.set_parameter(p, i as i32);
+        setter.end_set_parameter(p);
+    }
+}
+
+/// A level as the meter's fill fraction: -60 dB to +6 dB.
+fn meter_fraction(level: f32) -> f32 {
+    if level <= 0.0 {
+        return 0.0;
+    }
+    ((20.0 * level.log10() + 60.0) / 66.0).clamp(0.0, 1.0)
+}
+
+/// Clamp: the knobs, the meter, the toggle and the combos.
+fn clamp(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
+    let params = gui.params.clone();
+    let c = &params.clamp;
+    let on = c.on.value();
+    let knobs = [
+        (&c.input, "clamp_in", "Clamp input gain", 0.5),
+        (&c.output, "clamp_out", "Clamp output gain", 0.5),
+        (&c.ceiling, "clamp_ceiling", "Clamp ceiling", 0.5),
+        (&c.shape, "clamp_shape", "Clamp softness (shape)", 0.05),
+    ];
+    for ((p, id, hint, step), r) in knobs.into_iter().zip(layout::CLAMP_KNOBS) {
+        param_knob(gui, ui, setter, p, r, id, hint, step, on);
+    }
+    let meter = &gui.shared.status.clamp_meter;
+    let levels = [
+        f32::from_bits(meter[1].load(Ordering::Relaxed)),
+        f32::from_bits(meter[0].load(Ordering::Relaxed)),
+    ];
+    for (r, level) in [layout::METER_IN, layout::METER_OUT]
+        .into_iter()
+        .zip(levels)
+    {
+        let r = at(r);
+        let f = if on { meter_fraction(level) } else { 0.0 };
+        if f > 0.0 {
+            let bar = Rect::from_min_max(pos2(r.min.x, r.max.y - r.height() * f), r.max);
+            ui.painter().rect_filled(bar, 0.0, colour(ACCENT));
+        }
+    }
+    if on {
+        let ceiling = meter_fraction(10f32.powf(c.ceiling.value() / 20.0));
+        let r = at(layout::METER_OUT);
+        let y = r.max.y - r.height() * ceiling;
+        ui.painter().line_segment(
+            [pos2(r.min.x - 1.0, y), pos2(r.max.x + 1.0, y)],
+            (1.0, colour(0xffb870)),
+        );
+    }
+    let resp = ui.interact(at(layout::METER), Id::new("clamp_meter"), Sense::hover());
+    if resp.hovered() {
+        let db = |l: f32| {
+            if l > 0.0 {
+                format!("{:.1} dB", 20.0 * l.log10())
+            } else {
+                "-inf".into()
+            }
+        };
+        gui.hint = format!("Clamp level: in {}, out {}", db(levels[0]), db(levels[1]));
+    }
+    let resp = ui.interact(at(layout::CLAMP), Id::new("clamp_on"), Sense::click());
+    if resp.hovered() {
+        gui.hint = "Clamp clipper on/off (the last stage)".into();
+    }
+    if resp.clicked() {
+        setter.begin_set_parameter(&c.on);
+        setter.set_parameter(&c.on, !on);
+        setter.end_set_parameter(&c.on);
+    }
+    param_combo(
+        gui,
+        ui,
+        setter,
+        &c.kind,
+        layout::TYPE,
+        "clamp_type",
+        "Clamp type: A saturates into a hard clip, B is a soft-knee clipper",
+        &CLAMP_TYPES,
+    );
+    param_combo(
+        gui,
+        ui,
+        setter,
+        &c.mode,
+        layout::MODE,
+        "clamp_mode",
+        "Clamp channels: left/right or mid/side",
+        &CLAMP_MODES,
+    );
+    param_combo(
+        gui,
+        ui,
+        setter,
+        &c.oversampling,
+        layout::OVERSAMPLING,
+        "clamp_os",
+        "Clamp oversampling",
+        &CLAMP_OVERSAMPLING,
+    );
+}
+
+/// Input and live drawing for the whole section.
+pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
+    ensure_library(gui);
+    presets(gui, ui);
+    rack(gui, ui);
+    mix_knob(gui, ui);
+    clamp(gui, ui, setter);
 }
