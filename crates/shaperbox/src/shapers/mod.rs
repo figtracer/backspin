@@ -3,9 +3,11 @@
 
 pub mod crush;
 pub mod drive;
+pub mod filter;
 pub mod liquid;
 pub mod noise;
 pub mod pan;
+pub mod reverb;
 pub mod time;
 pub mod volume;
 pub mod width;
@@ -30,12 +32,15 @@ impl Wave<'_> {
     }
 }
 
-/// `DryWet` mix law 0 (0x2dcd10): `out = wet*m + dry*(1 - m)` per sample.
-pub fn dry_wet(wet: &mut [[f32; 2]], dry: &[[f32; 2]], m: impl Fn(usize) -> f32) {
-    for (i, (o, d)) in wet.iter_mut().zip(dry).enumerate() {
-        let m = m(i);
+/// `DryWet` mix law 0 (0x2dcd10): `out = fma(dry, 1 - m, wet * m)` per sample; `m == 1` is
+/// the wet signal.
+pub fn dry_wet(wet: &mut [[f32; 2]], dry: &[[f32; 2]], m: f32) {
+    if m == 1.0 {
+        return;
+    }
+    for (o, d) in wet.iter_mut().zip(dry) {
         for c in 0..2 {
-            o[c] = o[c] * m + d[c] * (1.0 - m);
+            o[c] = d[c].mul_add(1.0 - m, o[c] * m);
         }
     }
 }

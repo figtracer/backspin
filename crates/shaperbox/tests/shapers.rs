@@ -1,12 +1,15 @@
 //! Spot checks of the Time, Crush and Drive band DSP against the reference models in
 //! `.amp/in/sb` (the end-to-end comparisons against the plugin need the offline harness).
 
+use backspin_shaperbox::ftz::FlushToZero;
 use backspin_shaperbox::shapers::{
     Wave,
     crush::{CrushBand, CrushParams},
     drive::{Curve, internal_style},
+    filter::FilterBand,
     time::{TimeBand, range_seconds},
 };
+use backspin_shaperbox::smoother::Smoother;
 
 /// Drive curves at w = 0.5 against `.amp/in/sb/scripts/drive_curves.py` (internal styles).
 #[test]
@@ -108,5 +111,126 @@ fn time_moving_wave_small_delay() {
             "sample {i}: {} vs {want}",
             buf[i][0]
         );
+    }
+}
+
+/// Filter samples 10, 100 and 255 (L, R bits) against `FilterBand.process` of
+/// `.amp/in/sb/data/sb_filter_exact.py` at cutoff 0.5, resonance 0.75: (type, drive, clipping
+/// curve, stereo offset, samples).
+#[test]
+fn filter_matches_the_reference_bits() {
+    let cases: [(i32, f32, i32, f32, [u32; 6]); 10] = [
+        (
+            0,
+            0.182575,
+            0,
+            0.5,
+            [
+                0xbd38d184, 0x3d157d75, 0x3d365040, 0xbd21972e, 0xbc96e3ef, 0x3c9f4c7d,
+            ],
+        ),
+        (
+            2,
+            0.182575,
+            0,
+            0.5,
+            [
+                0xbd6bb827, 0xbcd3dae6, 0xbd0bb0d9, 0xbdc8723a, 0x3d2e7769, 0x3d49cdc5,
+            ],
+        ),
+        (
+            7,
+            1.0,
+            1,
+            0.3,
+            [
+                0x3e9e0996, 0x3f4ece49, 0x3e59da5b, 0x3d5c5662, 0xbdf759e8, 0x3f20c1a0,
+            ],
+        ),
+        (
+            13,
+            0.182575,
+            0,
+            0.5,
+            [
+                0xbcfcf850, 0xbbde9721, 0x3da7ebd6, 0xbdbc1608, 0xbcb542c6, 0x3bc2eeed,
+            ],
+        ),
+        (
+            14,
+            0.182575,
+            0,
+            0.3,
+            [
+                0x3e95ca6e, 0x3f3e6a5e, 0x3e6d38ba, 0xbdab25c4, 0xbe07401e, 0x3f3a3160,
+            ],
+        ),
+        (
+            15,
+            0.182575,
+            1,
+            0.5,
+            [
+                0x3e88b7b0, 0x3f420522, 0x3e4f5d62, 0x3c8bd8ce, 0xbdb5db68, 0x3f296c6b,
+            ],
+        ),
+        (
+            17,
+            0.5,
+            0,
+            0.5,
+            [
+                0x3e697bf2, 0x3f30e4f8, 0x3e4731b0, 0xbda80a11, 0xbd826d9b, 0x3f2c998c,
+            ],
+        ),
+        (
+            19,
+            0.182575,
+            0,
+            0.5,
+            [
+                0x3e6136e6, 0x3f4e3219, 0x3ed5e552, 0xbdcc396f, 0xbe29a72e, 0x3f2528b1,
+            ],
+        ),
+        (
+            5,
+            0.182575,
+            0,
+            0.7,
+            [
+                0x3e9e7b88, 0x3f4d763a, 0x3e03fd4e, 0x3df1081d, 0x3cbf4578, 0x3f163116,
+            ],
+        ),
+        (
+            8,
+            0.182575,
+            0,
+            0.5,
+            [
+                0x3eb32894, 0x3f4d07f4, 0x3de01952, 0x3e3e0712, 0xbdc4ef04, 0x3f1db94c,
+            ],
+        ),
+    ];
+    let _ftz = FlushToZero::new();
+    let x: Vec<[f32; 2]> = (0..256)
+        .map(|i| {
+            [
+                ((i * 37) % 101 - 50) as f32 / 60.0,
+                ((i * 53) % 89 - 44) as f32 / 50.0,
+            ]
+        })
+        .collect();
+    for (typ, drive, clip, so, want) in cases {
+        let mut band = FilterBand::new(48000.0, typ, drive, true, clip);
+        let so = Smoother::new(so, 48000.0, 0.0);
+        let mut buf = x.clone();
+        for b in buf.chunks_mut(100) {
+            band.process(b, Wave::Constant(0.5), Wave::Constant(0.75), &so);
+        }
+        let got: Vec<u32> = [10, 100, 255]
+            .iter()
+            .flat_map(|&i| buf[i].map(f32::to_bits))
+            .collect();
+        assert_eq!(got, want, "type {typ}");
     }
 }

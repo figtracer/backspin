@@ -487,7 +487,9 @@ dependencies = [
 name = "backspin-qfc"
 version = "0.1.0"
 dependencies = [
+ "backspin-presets",
  "cc",
+ "serde_json",
 ]
 
 [[package]]

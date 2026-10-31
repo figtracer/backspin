@@ -9,9 +9,11 @@ use crate::shapers::{
     crush::{CrushBand, CrushParams},
     drive::{DriveBand, DriveParams, internal_style},
     dry_wet,
+    filter::FilterBand,
     liquid::LiquidBand,
     noise::NoiseBand,
     pan::PanBand,
+    reverb::{ReverbBand, ReverbParams, hall_ir, send_mix},
     time::{Steps, TimeBand},
     volume, width,
 };
@@ -32,9 +34,10 @@ pub struct Transport {
     pub playing: bool,
 }
 
-/// Shaper ids whose waves use the step fix (`FUN_0031399c`).
-fn step_fix(shaper: usize) -> bool {
-    matches!(shaper, 0 | 4 | 5 | 13)
+/// Whether section `index` of a shaper reads its wave with the step fix (`FUN_0031399c`). The
+/// Reverb's send section (index 0) reads without it (shapers_b.md 5.8).
+fn step_fix(shaper: usize, index: usize) -> bool {
+    matches!(shaper, 0 | 5 | 13) || (shaper == 4 && index != 0)
 }
 
 /// One section LFO of a band.
@@ -52,9 +55,9 @@ struct LfoRt {
 }
 
 impl LfoRt {
-    fn new(lfo: &Lfo, shaper: usize, sr: f32) -> Self {
+    fn new(lfo: &Lfo, step_fix: bool, sr: f32) -> Self {
         Self {
-            wave: Wave::new(&lfo.points, step_fix(shaper)),
+            wave: Wave::new(&lfo.points, step_fix),
             smoothing: Smoothing::new(smoothing_coef(lfo.smoothing, sr)),
             lfo: lfo.clone(),
             phase: 0.0,
@@ -145,6 +148,26 @@ fn drive_params(band: &Band) -> DriveParams {
     }
 }
 
+/// The Reverb parameters of a band (the IR loader inputs and the pre-delay).
+fn reverb_params(band: &Band) -> ReverbParams {
+    let d = ReverbParams::default();
+    ReverbParams {
+        stretch: band.float("stretchFactor", d.stretch),
+        decay: band.float("decayTime", d.decay),
+        gated: band.boolean("gatedMode", d.gated),
+        delay_time: band.float("delayTime", d.delay_time),
+        delay_sync: band.int("delaySync", d.delay_sync),
+    }
+}
+
+/// The Reverb band of `band`: "Standard Hall 1" when the band names it; the "Off" IR and the
+/// library IRs, which are encrypted downloads, give a silent wet path as in the plugin.
+fn reverb_band(band: &Band, sr: f32) -> ReverbBand {
+    let file = band.string("impulseResponseFile").unwrap_or("");
+    let ir = file.contains("Standard Hall 1").then(hall_ir);
+    ReverbBand::new(sr, ir.as_deref(), reverb_params(band))
+}
+
 /// The wave port of the section `id` of a band, `default` when the band has no such section.
 fn section_port<'a>(band: &Band, lfos: &'a [LfoRt], id: &str, default: f32) -> Port<'a> {
     band.sections
@@ -159,13 +182,16 @@ struct BandRt {
     lfos: Vec<LfoRt>,
     crush: Option<Box<CrushBand>>,
     drive: Option<Box<DriveBand>>,
+    filter: Option<Box<FilterBand>>,
     gain: Smoother,
     haas_mix: Smoother,
     pan: Option<PanBand>,
     liquid: Option<LiquidBand>,
     noise: Option<NoiseBand>,
+    reverb: Option<Box<ReverbBand>>,
     stereo_offset: Smoother,
     time: Option<Box<TimeBand>>,
+    width: Smoother,
     dry: Vec<[f32; 2]>,
 }
 
@@ -175,17 +201,29 @@ impl BandRt {
             lfos: band
                 .sections
                 .iter()
-                .map(|s| LfoRt::new(&s.lfo, shaper, sr))
+                .enumerate()
+                .map(|(k, s)| LfoRt::new(&s.lfo, step_fix(shaper, k), sr))
                 .collect(),
             crush: (shaper == 1).then(|| Box::new(CrushBand::new(sr, crush_params(band)))),
             drive: (shaper == 9).then(|| Box::new(DriveBand::new(sr, drive_params(band)))),
+            filter: (shaper == 2).then(|| {
+                Box::new(FilterBand::new(
+                    sr as f64,
+                    band.int("typeWithoutBypass", 2),
+                    band.float("drive", 0.182_575),
+                    band.boolean("safeResonance", true),
+                    band.int("clippingCurve", 0),
+                ))
+            }),
             gain: Smoother::new(band.float("gain", 0.5), sr as f64, 0.0),
             haas_mix: Smoother::new(band.float("haasMix", 0.0), sr as f64, 0.0),
             pan: (shaper == 3).then(|| PanBand::new(sr)),
             liquid: (shaper == 11).then(|| LiquidBand::new(sr)),
             noise: (shaper == 8).then(|| NoiseBand::new(sr, band as *const Band as usize as i32)),
+            reverb: (shaper == 4).then(|| Box::new(reverb_band(band, sr))),
             stereo_offset: Smoother::new(band.float("stereoOffset", 0.5), sr as f64, 0.0),
             time: (shaper == 0).then(|| Box::new(TimeBand::new(sr))),
+            width: Smoother::new(band.float("width", 0.5), sr as f64, 0.0),
             dry: Vec::with_capacity(BLOCK),
         }
     }
@@ -337,6 +375,15 @@ impl Processor {
                                 cb.process(audio, bits, dec, crush_params(band));
                             }
                         }
+                        2 => {
+                            brt.stereo_offset
+                                .process(band.float("stereoOffset", 0.5), n);
+                            let cutoff = section_port(band, &brt.lfos, "cutoff", 1.0);
+                            let resonance = section_port(band, &brt.lfos, "resonance", 0.0);
+                            if let Some(fb) = brt.filter.as_mut() {
+                                fb.process(audio, cutoff, resonance, &brt.stereo_offset);
+                            }
+                        }
                         3 => {
                             brt.haas_mix.process(band.float("haasMix", 0.0), n);
                             if let Some(pb) = brt.pan.as_mut() {
@@ -347,6 +394,16 @@ impl Processor {
                                     band.float("haasTime", 0.3553),
                                     &brt.haas_mix,
                                 );
+                            }
+                        }
+                        4 => {
+                            brt.width.process(band.float("width", 0.5), n);
+                            // Section 0 is the send wave, section 1 the volume wave.
+                            let wave = |k: usize| {
+                                brt.lfos.get(k).map_or(Port::Constant(1.0), |l| l.port())
+                            };
+                            if let Some(rb) = brt.reverb.as_mut() {
+                                rb.process(audio, wave(0), wave(1), &brt.width, t.bpm);
                             }
                         }
                         5 => {
@@ -405,8 +462,11 @@ impl Processor {
                     if let Some(db) = brt.drive.as_mut() {
                         db.delay_dry(&mut brt.dry);
                     }
-                    let m = band.mix;
-                    dry_wet(audio, &brt.dry, |_| m);
+                    if k == 4 {
+                        send_mix(audio, &brt.dry, band.mix);
+                    } else {
+                        dry_wet(audio, &brt.dry, band.mix);
+                    }
                 }
                 multiband_sum(
                     &rt.bands,

@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 miniz_oxide = "0.8"
+realfft = "3.4"
 
 [dev-dependencies]
 miniz_oxide = "0.8"
