@@ -36,6 +36,15 @@ pub(crate) struct Check {
     pub tempo: f64,
     pub block: usize,
     pub notes: Vec<(usize, u8, bool)>,
+    /// The shape section and Clamp after the engine, for the chain check.
+    pub chain: Option<Chain>,
+}
+
+/// A shape preset (its file bytes) and Clamp's settings.
+#[derive(Clone)]
+pub(crate) struct Chain {
+    pub shape: Vec<u8>,
+    pub clamp: backspin_clamp::Params,
 }
 
 pub fn run(_args: &[String]) -> Result<(), String> {
@@ -77,6 +86,7 @@ pub fn run(_args: &[String]) -> Result<(), String> {
                 tempo: 120.0,
                 block: 512,
                 notes: vec![],
+                chain: None,
             });
         }
         checks.push(Check {
@@ -88,6 +98,7 @@ pub fn run(_args: &[String]) -> Result<(), String> {
             tempo: 174.0,
             block: 333,
             notes: vec![],
+            chain: None,
         });
     }
     checks.push(Check {
@@ -104,7 +115,44 @@ pub fn run(_args: &[String]) -> Result<(), String> {
             (512 * 200, 30, true),
             (512 * 260, 30, false),
         ],
+        chain: None,
     });
+    // Gross Beat, then the shape section, then Clamp, in one instance.
+    let clamps = [
+        backspin_clamp::Params {
+            kind: 1,
+            ceiling_db: -6.0,
+            oversampling: 1,
+            ..Default::default()
+        },
+        backspin_clamp::Params {
+            kind: 0,
+            shape: 0.5,
+            ceiling_db: -3.0,
+            in_db: 3.0,
+            oversampling: 2,
+            mode: 3,
+            ..Default::default()
+        },
+        backspin_clamp::Params {
+            bypass: true,
+            ..Default::default()
+        },
+    ];
+    for ((name, shape), clamp) in chain_presets(3).into_iter().zip(clamps) {
+        println!("chain: Repeater, shape preset {name:?}, clamp {clamp:?}");
+        checks.push(Check {
+            preset: "Repeater",
+            time: 20,
+            volume: 9,
+            input: "noise",
+            sr: 48000,
+            tempo: 120.0,
+            block: 512,
+            notes: vec![],
+            chain: Some(Chain { shape, clamp }),
+        });
+    }
     let vst3 = unsafe { crate::vst3_check::Vst3::open()? };
     let hosts: [(&str, &dyn Host); 2] = [("clap", &lib), ("vst3", &vst3)];
     let mut failed = 0;
@@ -283,7 +331,11 @@ unsafe fn check(lib: &dyn Host, dir: &Path, c: &Check) -> Result<Option<(f32, us
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).into_owned());
     }
-    let want = wav::read(&out_path, c.sr)?;
+    let mut want = wav::read(&out_path, c.sr)?;
+    let engine_only = want.clone();
+    if let Some(chain) = &c.chain {
+        apply_chain(&mut want, c, chain, lib.beat_factor())?;
+    }
 
     // The plugin: the preset goes in as nih-plug state, with the host parameters set to the preset
     // values and the two slot parameters.
@@ -309,11 +361,108 @@ unsafe fn check(lib: &dyn Host, dir: &Path, c: &Check) -> Result<Option<(f32, us
     if got.len() != want.len() {
         return Err(format!("length {} != {}", got.len(), want.len()));
     }
+    if c.chain.is_some() {
+        // The chain must change the engine's output, audibly and finitely.
+        let rms = |v: &[[f32; 2]]| {
+            (v.iter()
+                .map(|f| (f[0] * f[0] + f[1] * f[1]) as f64)
+                .sum::<f64>()
+                / (2 * v.len().max(1)) as f64)
+                .sqrt()
+        };
+        let diff: Vec<[f32; 2]> = got
+            .iter()
+            .zip(&engine_only)
+            .map(|(a, b)| [a[0] - b[0], a[1] - b[1]])
+            .collect();
+        if got.iter().any(|f| !f[0].is_finite() || !f[1].is_finite()) {
+            return Err("non-finite output".into());
+        }
+        if rms(&got) < 1e-4 || rms(&diff) < 1e-4 * rms(&engine_only) {
+            return Err(format!(
+                "the chain did not change the signal (rms {:.2e}, change {:.2e})",
+                rms(&got),
+                rms(&diff)
+            ));
+        }
+    }
     Ok(first.map(|f| (max, f)))
 }
 
-/// The nih-plug state JSON for a blob and parameter values.
-pub(crate) fn state_json(blob: &[u8], params: &[i32; 9]) -> String {
+/// The plugin's tick resolution (`PPQ` in the plugin crate): the song position it hands the
+/// shape section goes through ticks.
+const PPQ: f64 = 96.0;
+
+/// The reference of the chain after the engine: the shape processor built from the preset and
+/// Clamp, block by block with the transport the plugin derives from the host's beat timeline.
+fn apply_chain(
+    buf: &mut [[f32; 2]],
+    c: &Check,
+    chain: &Chain,
+    beat_factor: Option<f64>,
+) -> Result<(), String> {
+    use backspin_shaperbox::graph::{Processor, Transport};
+    let tree = backspin_shaperbox::read_preset(&chain.shape)?;
+    let state = backspin_shaperbox::state::State::from_tree(&tree);
+    let mut sb = Processor::new(state, c.sr as f32);
+    let mut clamp = backspin_clamp::Clamp::new(c.sr as f32, c.block);
+    let (mut l, mut r) = (vec![0f32; c.block], vec![0f32; c.block]);
+    let mut pos = 0;
+    while pos < buf.len() {
+        let n = c.block.min(buf.len() - pos);
+        let beats = pos as f64 * c.tempo / 60.0 / c.sr as f64;
+        let host = beat_factor.map_or(beats, |f| (beats * f).round() / f);
+        let ppq = host * PPQ / PPQ;
+        let block = &mut buf[pos..pos + n];
+        sb.process(
+            block,
+            Transport {
+                ppq,
+                bpm: c.tempo,
+                playing: true,
+            },
+        );
+        if !chain.clamp.bypass {
+            for (i, f) in block.iter().enumerate() {
+                l[i] = f[0];
+                r[i] = f[1];
+            }
+            {
+                let _ftz = backspin_shaperbox::ftz::FlushToZero::new();
+                clamp.process(&mut l[..n], &mut r[..n], &chain.clamp);
+            }
+            for (i, f) in block.iter_mut().enumerate() {
+                *f = [l[i], r[i]];
+            }
+        }
+        pos += n;
+    }
+    Ok(())
+}
+
+/// Shape presets for the chain checks: the first `n` of the local library with at least three
+/// shapers on and no Noise (its generator is seeded per instance, so two instances differ).
+fn chain_presets(n: usize) -> Vec<(String, Vec<u8>)> {
+    let lib = backspin_presets::shape_library(None);
+    let Some(all) = lib.first() else {
+        return Vec::new();
+    };
+    all.presets
+        .iter()
+        .filter_map(|p| {
+            let data = p.bytes()?.into_owned();
+            let tree = backspin_shaperbox::read_preset(&data).ok()?;
+            let s = backspin_shaperbox::state::State::from_tree(&tree);
+            let on: Vec<usize> = s.order();
+            (on.len() >= 3 && !on.contains(&8)).then(|| (p.name.clone(), data))
+        })
+        .take(n)
+        .collect()
+}
+
+/// The nih-plug state JSON for a blob and parameter values, with the shape section and Clamp of
+/// a chain check.
+pub(crate) fn state_json(blob: &[u8], params: &[i32; 9], chain: Option<&Chain>) -> String {
     let ids = [
         "time_slot",
         "volume_slot",
@@ -325,16 +474,33 @@ pub(crate) fn state_json(blob: &[u8], params: &[i32; 9]) -> String {
         "hold",
         "scratch",
     ];
-    let p: Vec<String> = ids
+    let mut p: Vec<String> = ids
         .iter()
         .zip(params)
         .map(|(id, v)| format!("\"{id}\":{{\"i32\":{v}}}"))
         .collect();
-    let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
-    let field = format!("\"\\\"{hex}\\\"\"");
+    let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let mut fields = vec![format!("\"gross-beat-state\":\"\\\"{}\\\"\"", hex(blob))];
+    if let Some(c) = chain {
+        let k = &c.clamp;
+        p.extend([
+            format!("\"clamp_on\":{{\"bool\":{}}}", !k.bypass),
+            format!("\"clamp_oversampling\":{{\"i32\":{}}}", k.oversampling),
+            format!("\"clamp_in\":{{\"f32\":{}}}", k.in_db),
+            format!("\"clamp_out\":{{\"f32\":{}}}", k.out_db),
+            format!("\"clamp_ceiling\":{{\"f32\":{}}}", k.ceiling_db),
+            format!("\"clamp_shape\":{{\"f32\":{}}}", k.shape),
+            format!("\"clamp_type\":{{\"i32\":{}}}", k.kind),
+            format!("\"clamp_mode\":{{\"i32\":{}}}", k.mode),
+        ]);
+        // The shape section's field: one byte "enabled", then the preset file.
+        let sb = [&[1u8][..], &c.shape].concat();
+        fields.push(format!("\"shaperbox-state\":\"\\\"{}\\\"\"", hex(&sb)));
+    }
     format!(
-        "{{\"version\":\"check\",\"params\":{{{}}},\"fields\":{{\"gross-beat-state\":{field}}}}}",
-        p.join(",")
+        "{{\"version\":\"check\",\"params\":{{{}}},\"fields\":{{{}}}}}",
+        p.join(","),
+        fields.join(",")
     )
 }
 
@@ -349,6 +515,10 @@ pub(crate) trait Host {
         input: &[[f32; 2]],
         c: &Check,
     ) -> Result<Vec<[f32; 2]>, String>;
+
+    /// The fixed-point resolution of the song position the host sends, or `None` when it sends
+    /// beats as a double.
+    fn beat_factor(&self) -> Option<f64>;
 }
 
 /// The loaded CLAP library.
@@ -386,6 +556,10 @@ impl Library {
 }
 
 impl Host for Library {
+    fn beat_factor(&self) -> Option<f64> {
+        Some(CLAP_BEATTIME_FACTOR as f64)
+    }
+
     unsafe fn render(
         &self,
         blob: &[u8],
@@ -419,7 +593,7 @@ impl Host for Library {
             let state = (p.get_extension.unwrap())(plugin, CLAP_EXT_STATE.as_ptr())
                 as *const clap_plugin_state;
             // nih-plug prefixes its CLAP state with the JSON length as a u64.
-            let json = state_json(blob, params).into_bytes();
+            let json = state_json(blob, params, c.chain.as_ref()).into_bytes();
             let json = [&(json.len() as u64).to_le_bytes()[..], &json].concat();
             let mut reader = Reader { data: json, pos: 0 };
             let stream = clap_istream {

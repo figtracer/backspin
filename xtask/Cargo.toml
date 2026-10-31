@@ -6,7 +6,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+backspin-clamp.workspace = true
 backspin-presets.workspace = true
+backspin-shaperbox.workspace = true
 nih_plug_xtask.workspace = true
 backspin-engine.workspace = true
 backspin-render.workspace = true

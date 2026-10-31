@@ -279,6 +279,11 @@ unsafe fn vtbl<T>(obj: *mut c_void) -> &'static T {
 }
 
 impl Host for Vst3 {
+    /// VST3 sends the project time in beats as a double.
+    fn beat_factor(&self) -> Option<f64> {
+        None
+    }
+
     unsafe fn render(
         &self,
         blob: &[u8],
@@ -298,7 +303,7 @@ impl Host for Vst3 {
             (cv.initialize)(comp, std::ptr::null_mut());
             let mut stream = Box::new(Stream {
                 vtbl: &STREAM_VTBL,
-                data: state_json(blob, params).into_bytes(),
+                data: state_json(blob, params, c.chain.as_ref()).into_bytes(),
                 pos: 0,
             });
             if (cv.set_state)(comp, &mut *stream as *mut Stream as *mut c_void) != K_RESULT_OK {
@@ -320,8 +325,18 @@ impl Host for Vst3 {
             }
             (cv.set_active)(comp, 1);
             (pv.set_processing)(proc_, 1);
-            if (pv.get_latency_samples)(proc_) != 15 {
-                return Err("latency is not 15 samples".into());
+            // Gross Beat's 15 samples, plus the shape section's own when the check has one.
+            let want = 15
+                + c.chain.as_ref().map_or(0, |ch| {
+                    let tree = backspin_shaperbox::read_preset(&ch.shape).ok();
+                    tree.map_or(0, |t| {
+                        let s = backspin_shaperbox::state::State::from_tree(&t);
+                        backspin_shaperbox::graph::Processor::new(s, c.sr as f32).latency() as u32
+                    })
+                });
+            let got = (pv.get_latency_samples)(proc_);
+            if got != want {
+                return Err(format!("latency is {got} samples, not {want}"));
             }
             let mut out = vec![[0f32; 2]; input.len()];
             let (mut inl, mut inr) = (vec![0f32; c.block], vec![0f32; c.block]);
