@@ -78,3 +78,44 @@ pub fn shape_library() -> Option<PathBuf> {
     }
     candidates.into_iter().find(|p| p.is_dir())
 }
+
+/// The fonts FL Studio ships (`Shared/Artwork/Fonts` of the install): OpenSans, Ubuntu,
+/// `ILGlyphsEx.ilfont` and others.
+pub fn fonts() -> Option<PathBuf> {
+    in_fl("Shared/Artwork/Fonts")
+}
+
+/// The system font folders, the shared folder (`CSIDL_FONTS`) first.
+pub fn system_fonts() -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    if cfg!(target_os = "macos") {
+        v.push(PathBuf::from("/System/Library/Fonts/Supplemental"));
+        v.push(PathBuf::from("/System/Library/Fonts"));
+        v.push(PathBuf::from("/Library/Fonts"));
+        if let Some(h) = home() {
+            v.push(h.join("Library/Fonts"));
+        }
+    } else if cfg!(windows) {
+        let win = std::env::var_os("WINDIR")
+            .or_else(|| std::env::var_os("SystemRoot"))
+            .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+        v.push(win.join("Fonts"));
+        if let Some(a) = std::env::var_os("LOCALAPPDATA") {
+            v.push(Path::new(&a).join(r"Microsoft\Windows\Fonts"));
+        }
+    } else {
+        v.push(PathBuf::from("/usr/share/fonts/truetype/msttcorefonts"));
+        if let Some(h) = home() {
+            v.push(h.join(".fonts"));
+        }
+    }
+    v
+}
+
+/// A system font file by name (for example `Arial.ttf`), or `None` if no font folder has it.
+pub fn system_font(name: &str) -> Option<PathBuf> {
+    system_fonts()
+        .into_iter()
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+}

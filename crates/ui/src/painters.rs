@@ -1,8 +1,9 @@
-//! The form's painters at scale 1 (gfx.md sections 7.2, 7.4 and 8), in the component order of
-//! `SynthEditorForm` (the later control paints over the earlier one). Controls not ported yet
-//! (the knobs, HOLD, Options, SlotZoom, the scratch clock, the envelope editor) are skipped.
+//! The form's painters at scale 1 (gfx.md sections 7 and 8), in the component order of
+//! `SynthEditorForm` (the later control paints over the earlier one).
 
-use crate::{Font, HEIGHT, Model, PANEL, Text};
+use crate::env::{ENV_H, ENV_W, paint_env};
+use crate::knob::{self, Knob, paint_knob};
+use crate::{Font, HEIGHT, Model, PANEL, Text, btn, clock};
 use backspin_gfx::dib::lighten;
 use backspin_gfx::{Dib, DrawPath, PI, Rect, gradient_lut, s};
 
@@ -14,10 +15,16 @@ pub(crate) fn sd(n: f64) -> f64 {
 
 /// `FUN_00148200`: paints a graphic control in its own coordinates, clipped to its rect.
 pub(crate) fn control(dib: &mut Dib, r: Rect, f: impl FnOnce(&mut Dib, i32, i32)) {
+    let (w, h) = (r.x1 - r.x0, r.y1 - r.y0);
+    control_clipped(dib, r, Rect::new(0, 0, w, h), f);
+}
+
+/// [`control`] with its own clip in control coordinates (the labels widen it by a pixel).
+fn control_clipped(dib: &mut Dib, r: Rect, clip: Rect, f: impl FnOnce(&mut Dib, i32, i32)) {
     let old = dib.clip();
     dib.move_origin(r.x0, r.y0);
     let (w, h) = (r.x1 - r.x0, r.y1 - r.y0);
-    let c = Rect::new(0, 0, w, h).intersect(dib.clip());
+    let c = clip.intersect(dib.clip());
     dib.set_clip(c);
     f(dib, w, h);
     dib.move_origin(-r.x0, -r.y0);
@@ -178,10 +185,23 @@ pub(crate) fn v_button(
     down: bool,
     text: &mut dyn Text,
 ) {
+    v_button_in(dib, w, h, Font::ButtonGlyph, glyph, down, text);
+}
+
+/// [`v_button`] with the button's own font.
+fn v_button_in(
+    dib: &mut Dib,
+    w: i32,
+    h: i32,
+    font: Font,
+    glyph: &str,
+    down: bool,
+    text: &mut dyn Text,
+) {
     side_tab(dib, 0.0, down);
     text.draw(
         dib,
-        Font::ButtonGlyph,
+        font,
         glyph,
         Rect::new(0, 0, w, h),
         0x1a,
@@ -199,10 +219,23 @@ pub(crate) fn h_button(
     down: bool,
     text: &mut dyn Text,
 ) {
+    h_button_in(dib, w, h, Font::ButtonGlyph, glyph, down, text);
+}
+
+/// [`h_button`] with the button's own font.
+fn h_button_in(
+    dib: &mut Dib,
+    w: i32,
+    h: i32,
+    font: Font,
+    glyph: &str,
+    down: bool,
+    text: &mut dyn Text,
+) {
     bottom_tab(dib, 0, down);
     text.draw(
         dib,
-        Font::ButtonGlyph,
+        font,
         glyph,
         Rect::new(-5, -3, w, h),
         0x2,
@@ -232,7 +265,6 @@ fn side_selector(
 /// TimeSlotSelPaint (0x66bb0) for one group.
 fn slot_grid(dib: &mut Dib, w: i32, h: i32, m: &Model, g: usize, text: &mut dyn Text) {
     const FILL: [u32; 2] = [0x99e669, 0xffb870];
-    const GROUP: [u32; 2] = [0xa8ff70, 0xffb870];
     let (cw, ch) = (w / 4, h / 9);
     let selected = m.selected[g];
     for i in 0..36usize {
@@ -277,8 +309,30 @@ fn slot_grid(dib: &mut Dib, w: i32, h: i32, m: &Model, g: usize, text: &mut dyn 
     }
 }
 
-/// The combo boxes (ForceHoldSelPaint 0x617a0).
-pub(crate) fn combo(dib: &mut Dib, w: i32, h: i32, label: &str, value: &str, text: &mut dyn Text) {
+/// The combo boxes: the framework caption and down arrow (`TCustomQuickBtn.Paint`,
+/// `FUN_00200750`), then the owner draw (ForceHoldSelPaint 0x617a0) that covers them.
+fn combo(dib: &mut Dib, w: i32, h: i32, label: &str, value: &str, text: &mut dyn Text) {
+    text.draw(
+        dib,
+        Font::ComboValue,
+        value,
+        Rect::new(3, 3, w - 3, 16),
+        0x100058,
+        0xc4d0d7,
+        0x110,
+    );
+    let w64 = w as f64;
+    btn::arrow(
+        dib.agg(),
+        [
+            (w64 - 11.5, 7.0),
+            (w64 - 7.98, 11.0),
+            (w64 - 7.5, 11.0),
+            (w64 - 7.02, 11.0),
+            (w64 - 3.5, 7.0),
+        ],
+        0x70d7d0c4,
+    );
     let v = Rect::new((w as f64 * 0.5) as i32, s(1.0, SC), w, h);
     combo_at(dib, w, h, label, value, v, text);
 }
@@ -303,7 +357,7 @@ pub(crate) fn combo_at(
         0xb0bdc6,
         0x110,
     );
-    text.draw(dib, Font::ComboValue, value, v, 0x18, 0xc4d0d7, 0x110);
+    text.draw(dib, Font::ComboValue, value, v, 0x18, 0xb0bdc6, 0x110);
     text.draw(
         dib,
         Font::ButtonGlyph,
@@ -315,7 +369,33 @@ pub(crate) fn combo_at(
     );
 }
 
-/// Paints the frame (the parent form; the envelope editor child window is separate).
+/// The group colours (`plugin +0x2e8`): time, volume.
+const GROUP: [u32; 2] = [0xa8ff70, 0xffb870];
+
+/// A knob of the form at its place.
+fn knob_at(dib: &mut Dib, k: &Knob, m: &Model) {
+    control(dib, rect(k.x, k.y, k.size, k.size), |d, _, _| {
+        paint_knob(d, k, k.value(&m.params))
+    });
+}
+
+/// A wheel label (`TQuickLabel`, transparent, centred, upper vcentre, end ellipsis).
+fn wheel_label(dib: &mut Dib, r: Rect, caption: &str, text: &mut dyn Text) {
+    let (w, h) = (r.x1 - r.x0, r.y1 - r.y0);
+    control_clipped(dib, r, Rect::new(-1, 0, w + 1, h), |d, w, h| {
+        text.draw(
+            d,
+            Font::ComboLabel,
+            caption,
+            Rect::new(0, 0, w, h),
+            0x8062,
+            0xb9c5c4,
+            0x110,
+        )
+    });
+}
+
+/// Paints the frame: the form's controls, then the envelope editor (its own window).
 pub fn paint(dib: &mut Dib, m: &Model, text: &mut dyn Text) {
     dib.fill_rect(Rect::new(0, 0, dib.width(), dib.height()), PANEL, 0x100);
     // SlotsBevel (VB_Plain #171f24).
@@ -325,10 +405,10 @@ pub fn paint(dib: &mut Dib, m: &Model, text: &mut dyn Text) {
         top_bg(d, w, m.clock, text)
     });
     control(dib, rect(270, 327, 23, 27), |d, w, h| {
-        v_button(d, w, h, "\u{f07e}", m.freeze, text)
+        v_button_in(d, w, h, Font::FreezeGlyph, "\u{f07e}", m.freeze, text)
     });
     control(dib, rect(270, 4, 23, 27), |d, w, h| {
-        v_button(d, w, h, "\u{f08b}", false, text)
+        v_button_in(d, w, h, Font::MenuGlyph, "\u{f08b}", false, text)
     });
     control(dib, rect(270, 275, 23, 27), |d, w, h| {
         v_button(d, w, h, "C", m.step, text)
@@ -370,10 +450,9 @@ pub fn paint(dib: &mut Dib, m: &Model, text: &mut dyn Text) {
             );
         })
     });
-    // The knobs (VolAttWheel, VolTnsWheel, VolRelWheel) come next; they leave the shared canvas
-    // with the round join, which the later tabs inherit (the constructor's reset runs before
-    // attach, so the earlier tabs stroke with Blend2D's default miter clip).
-    dib.agg().line_join(2);
+    knob_at(dib, &knob::VOL_ATT, m);
+    knob_at(dib, &knob::VOL_TNS, m);
+    knob_at(dib, &knob::VOL_REL, m);
     let [tg, vg] = grid_rects();
     control(dib, tg, |d, w, h| slot_grid(d, w, h, m, 0, text));
     control(dib, vg, |d, w, h| slot_grid(d, w, h, m, 1, text));
@@ -383,18 +462,113 @@ pub fn paint(dib: &mut Dib, m: &Model, text: &mut dyn Text) {
     control(dib, rect(718, 512, 106, 19), |d, w, h| {
         combo(d, w, h, "POS SYNC:", &m.combos[2], text)
     });
+    // NameLabel (loVCenter, loEndEllipsis): "Time: " / "Volume: " and the edited slot's name.
+    let g = m.group.min(1);
+    let slot = m.edited[g];
+    let name = match m.names[g].get(slot) {
+        Some(n) if !n.is_empty() => n.clone(),
+        _ => format!("Slot {}", slot + 1),
+    };
+    let caption = format!("{}: {name}", ["Time", "Volume"][g]);
+    control_clipped(
+        dib,
+        rect(298, 510, 157, 22),
+        Rect::new(-1, 0, 158, 22),
+        |d, _, _| {
+            text.draw(
+                d,
+                Font::Caption,
+                &caption,
+                Rect::new(0, -1, 157, 22),
+                0x8058,
+                GROUP[g],
+                0x110,
+            )
+        },
+    );
     if m.group == 0 {
         control(dib, rect(457, 512, 22, 24), |d, w, h| {
             h_button(d, w, h, "\u{f054}", m.link, text)
         });
     }
     control(dib, rect(480, 512, 22, 24), |d, w, h| {
-        h_button(d, w, h, "\u{f014}", m.key_held, text)
+        h_button_in(d, w, h, Font::KeyHeldGlyph, "\u{f014}", m.key_held, text)
     });
     control(dib, rect(503, 512, 22, 24), |d, w, h| {
-        h_button(d, w, h, "1", m.one_shot, text)
+        h_button_in(d, w, h, Font::OneShotGlyph, "1", m.one_shot, text)
+    });
+    knob_at(dib, &knob::VOL_MIX, m);
+    // OptionsBtn (FS_SoberOutlineTransparent: no frame when up) and its down arrow.
+    control(dib, rect(7, 66, 20, 20), |d, _, _| {
+        btn::arrow(
+            d.agg(),
+            [
+                (9.0, 14.0),
+                (13.0, 10.48),
+                (13.0, 10.0),
+                (13.0, 9.52),
+                (9.0, 6.0),
+            ],
+            0xf4d3cfc9,
+        )
+    });
+    control(dib, rect(109, 60, 63, 30), |d, w, h| {
+        btn::hold_btn(d, w, h, m.params[7] != 0, text)
     });
     control(dib, rect(530, 512, 76, 19), |d, w, h| {
         combo(d, w, h, "HOLD:", &m.combos[0], text)
     });
+    wheel_label(dib, rect(111, 459, 32, 15), "REL", text);
+    wheel_label(dib, rect(59, 459, 36, 12), "ATT", text);
+    wheel_label(dib, rect(170, 459, 26, 15), "TNS", text);
+    knob_at(dib, &knob::TIME_MIX, m);
+    // SlotZoom (FS_SoberOutlineTransparent): the caption only.
+    control(dib, rect(8, 447, 24, 19), |d, _, _| {
+        text.draw(
+            d,
+            Font::IlGlyphs,
+            "\u{f024}",
+            Rect::new(1, 1, 23, 18),
+            0x10005a,
+            0xb9bfc3,
+            0x110,
+        )
+    });
+    if m.clock {
+        control(dib, rect(186, 11, 72, 72), |d, w, h| {
+            clock::paint_clock(d, w, h, m.params[8], GROUP[0])
+        });
+    }
+    // The envelope editor paints into its own bitmap and canvas, then shows at (298, 5).
+    let mut env = Dib::new(ENV_W, ENV_H, 0xff00_0000);
+    paint_env(
+        &mut env,
+        &m.env_view,
+        &m.env_points,
+        GROUP[g],
+        &m.watermark,
+        text,
+    );
+    blit(dib, &env, 298, 5);
+}
+
+/// Copies `src` to `(x, y)` of `dst` (in origin coordinates), clipped.
+fn blit(dst: &mut Dib, src: &Dib, x: i32, y: i32) {
+    let (ox, oy) = dst.origin();
+    let r = Rect::new(x, y, x + src.width(), y + src.height())
+        .intersect(dst.clip())
+        .offset(ox, oy)
+        .intersect(Rect::new(0, 0, dst.width(), dst.height()));
+    if r.is_empty() {
+        return;
+    }
+    let (dw, sw) = (dst.width() as usize, src.width() as usize);
+    let (sx, sy) = ((r.x0 - ox - x) as usize, (r.y0 - oy - y) as usize);
+    let n = (r.x1 - r.x0) as usize;
+    let px = dst.pixels_mut();
+    for row in 0..(r.y1 - r.y0) as usize {
+        let d = (r.y0 as usize + row) * dw + r.x0 as usize;
+        let s = (sy + row) * sw + sx;
+        px[d..d + n].copy_from_slice(&src.pixels()[s..s + n]);
+    }
 }

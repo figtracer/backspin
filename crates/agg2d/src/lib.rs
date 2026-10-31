@@ -53,6 +53,16 @@ unsafe extern "C" {
         y: c_double,
     );
     fn agg_close_polygon(a: *mut Raw);
+    fn agg_hor_line_to(a: *mut Raw, x: c_double);
+    fn agg_add_ellipse(
+        a: *mut Raw,
+        cx: c_double,
+        cy: c_double,
+        rx: c_double,
+        ry: c_double,
+        dir: c_int,
+    );
+    fn agg_radial_gradient(a: *mut Raw, cx: c_double, cy: c_double, r: c_double, slot: u32);
     fn agg_draw_path(a: *mut Raw, flag: u32);
     fn agg_gradient_color_buffer(a: *mut Raw, slot: u32) -> *mut i16;
     fn agg_linear_gradient(
@@ -235,6 +245,16 @@ impl Agg2D {
         unsafe { agg_close_polygon(self.raw) }
     }
 
+    /// A line to `x` at the y of the last vertex.
+    pub fn hor_line_to(&mut self, x: f64) {
+        unsafe { agg_hor_line_to(self.raw, x) }
+    }
+
+    /// Adds an ellipse as a closed figure; `clockwise` false is Agg2D's direction 0.
+    pub fn add_ellipse(&mut self, cx: f64, cy: f64, rx: f64, ry: f64, clockwise: bool) {
+        unsafe { agg_add_ellipse(self.raw, cx, cy, rx, ry, clockwise as c_int) }
+    }
+
     pub fn draw_path(&mut self, mode: DrawPath) {
         unsafe { agg_draw_path(self.raw, mode as u32) }
     }
@@ -249,6 +269,10 @@ impl Agg2D {
 
     pub fn linear_gradient(&mut self, x1: f64, y1: f64, x2: f64, y2: f64, slot: u32) {
         unsafe { agg_linear_gradient(self.raw, x1, y1, x2, y2, slot) }
+    }
+
+    pub fn radial_gradient(&mut self, cx: f64, cy: f64, r: f64, slot: u32) {
+        unsafe { agg_radial_gradient(self.raw, cx, cy, r, slot) }
     }
 
     pub fn radial_gradient_ex(

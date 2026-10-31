@@ -80,6 +80,11 @@ impl Dib {
         &self.px
     }
 
+    /// All pixels, mutable (absolute coordinates, `width` pixels per row).
+    pub fn pixels_mut(&mut self) -> &mut [u32] {
+        &mut self.px
+    }
+
     /// The pixel at absolute coordinates.
     pub fn pixel(&self, x: i32, y: i32) -> u32 {
         self.px[(y * self.w + x) as usize]

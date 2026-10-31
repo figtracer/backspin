@@ -7,7 +7,7 @@ pub mod gradient;
 
 pub use backspin_agg2d::{Agg2D, DrawPath};
 pub use dib::{Dib, Rect};
-pub use gradient::gradient_lut;
+pub use gradient::{gradient_lut, gradient_lut_ex};
 
 /// `DAT_003545f0`: the plugin's pi is a float32 constant, widened to double for the Agg2D calls.
 pub const PI: f64 = std::f32::consts::PI as f64;

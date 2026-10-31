@@ -1,14 +1,32 @@
-//! Writes the frame and the ShaperBox section, without text, to the PNG named by the argument.
+//! Writes the frame and the ShaperBox section to the PNG named by the argument, and prints the
+//! time of a full-frame paint (the first one, which opens the fonts and rasterises the glyphs,
+//! and the mean of the next 200).
 
 use backspin_gfx::Dib;
 use backspin_ui::{
-    HEIGHT, Model, NoText, PANEL, SB_HEIGHT, SbModel, ShaperCell, WIDTH, paint, paint_sb,
+    HEIGHT, Model, PANEL, QfcText, SB_HEIGHT, SbModel, ShaperCell, WIDTH, paint, paint_sb,
 };
+use std::time::Instant;
 
 fn main() {
     let out = std::env::args().nth(1).expect("output path");
+    let mut text = QfcText::new();
+    let model = Model::default();
     let mut dib = Dib::new(WIDTH, HEIGHT + SB_HEIGHT, PANEL);
-    paint(&mut dib, &Model::default(), &mut NoText);
+    let t = Instant::now();
+    paint(&mut dib, &model, &mut text);
+    let first = t.elapsed();
+    let n = 200;
+    let t = Instant::now();
+    for _ in 0..n {
+        let mut d = Dib::new(WIDTH, HEIGHT + SB_HEIGHT, PANEL);
+        paint(&mut d, &model, &mut text);
+    }
+    println!(
+        "paint: first {:.2} ms, then {:.3} ms per frame",
+        first.as_secs_f64() * 1e3,
+        t.elapsed().as_secs_f64() * 1e3 / n as f64
+    );
     let names = [
         "time",
         "crush",
@@ -50,7 +68,7 @@ fn main() {
         ..Default::default()
     };
     dib.move_origin(0, HEIGHT);
-    paint_sb(&mut dib, &m, &mut NoText);
+    paint_sb(&mut dib, &m, &mut text);
     dib.move_origin(0, -HEIGHT);
     let (w, h) = (dib.width() as u32, dib.height() as u32);
     let rgb: Vec<u8> = dib

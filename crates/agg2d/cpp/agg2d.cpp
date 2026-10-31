@@ -317,6 +317,20 @@ void agg_cubic_curve_to(Agg2D* a, double c1x, double c1y, double c2x, double c2y
 
 void agg_close_polygon(Agg2D* a) { blPathClose(&a->path); }
 
+// bl:0x2ebc: a line to x at the y of the last vertex.
+void agg_hor_line_to(Agg2D* a, double x) {
+  BLPoint p = {0.0, 0.0};
+  blPathGetLastVertex(&a->path, &p);
+  blPathLineTo(&a->path, x, p.y);
+}
+
+// bl:0x328c: direction 0 adds a counter-clockwise ellipse, anything else a clockwise one.
+void agg_add_ellipse(Agg2D* a, double cx, double cy, double rx, double ry, int dir) {
+  BLEllipse e = {cx, cy, rx, ry};
+  blPathAddGeometry(&a->path, BL_GEOMETRY_TYPE_ELLIPSE, &e, nullptr,
+                    dir == 0 ? BL_GEOMETRY_DIRECTION_CCW : BL_GEOMETRY_DIRECTION_CW);
+}
+
 // bl:0x32d4 drawPath: 0 fill, 1 stroke, 2 fill then stroke, 3 fill with the line style,
 // 4 stroke with the fill style, 5 stroke then fill.
 void agg_draw_path(Agg2D* a, uint32_t flag) {
@@ -348,6 +362,17 @@ void agg_linear_gradient(Agg2D* a, double x1, double y1, double x2, double y2, u
   blGradientSetType(g, BL_GRADIENT_TYPE_LINEAR);
   double v[4] = {x1, y1, x2, y2};
   blGradientSetValues(g, 0, v, 4);
+  blGradientApplyTransformOp(g, BL_TRANSFORM_OP_ASSIGN, &a->state()->finalTransform);
+}
+
+// bl:0x3494: values (cx, cy, cx, cy, r, 0) in the context's final matrix.
+void agg_radial_gradient(Agg2D* a, double cx, double cy, double r, uint32_t slot) {
+  int s = slot == 1 ? 0 : 1;
+  a->style[s] = STYLE_GRADIENT;
+  BLGradientCore* g = &a->gradient[s];
+  blGradientSetType(g, BL_GRADIENT_TYPE_RADIAL);
+  double v[6] = {cx, cy, cx, cy, r, 0.0};
+  blGradientSetValues(g, 0, v, 6);
   blGradientApplyTransformOp(g, BL_TRANSFORM_OP_ASSIGN, &a->state()->finalTransform);
 }
 

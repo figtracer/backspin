@@ -512,7 +512,10 @@ dependencies = [
 name = "backspin-ui"
 version = "0.1.0"
 dependencies = [
+ "backspin-envelope",
  "backspin-gfx",
+ "backspin-presets",
+ "backspin-qfc",
  "png 0.17.16",
 ]
 
