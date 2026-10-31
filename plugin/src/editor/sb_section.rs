@@ -320,6 +320,57 @@ fn mix_knob(gui: &mut Gui, ui: &mut Ui) {
     );
 }
 
+/// The wave view: vertical drag sets the band's mix (Ctrl finer), the wheel steps the LFO length
+/// through the sync divisions, double-click resets the mix to 100 %. The processors are rebuilt
+/// when a drag ends.
+fn wave_view(gui: &mut Gui, ui: &mut Ui) {
+    let resp = ui.interact(
+        at(layout::WAVE),
+        Id::new("sb_wave"),
+        Sense::click_and_drag(),
+    );
+    let (k, b) = (gui.sb_selected, gui.sb_band);
+    let mix = {
+        let m = gui.shared.sb.model.lock();
+        m.tree
+            .as_ref()
+            .map(|t| State::from_tree(t).shapers[k].bands[b].mix)
+    };
+    let Some(mix) = mix else { return };
+    if resp.drag_started_by(PointerButton::Primary) {
+        gui.sb_band_drag = Some((mix, 0.0));
+    }
+    if let Some((start, travel)) = gui.sb_band_drag
+        && resp.dragged_by(PointerButton::Primary)
+    {
+        let fine = ui.input(|i| i.modifiers.command);
+        let travel = travel - resp.drag_delta().y / if fine { 16.0 } else { 1.0 };
+        gui.sb_band_drag = Some((start, travel));
+        let v = (start + travel / resp.rect.height()).clamp(0.0, 1.0);
+        gui.shared.sb.set_band_mix(k, b, v, false);
+    }
+    if resp.drag_stopped_by(PointerButton::Primary) && gui.sb_band_drag.take().is_some() {
+        gui.shared.sb.set_band_mix(k, b, mix, true);
+    }
+    if resp.double_clicked() {
+        gui.shared.sb.set_band_mix(k, b, 1.0, true);
+    }
+    if resp.hovered() {
+        let scroll = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll != 0.0 {
+            gui.shared
+                .sb
+                .step_lfo_length(k, b, if scroll > 0.0 { 1 } else { -1 });
+        }
+        gui.hint = format!(
+            "{} {} band mix {:.0}%: drag to change, wheel for the rate, double-click for 100%",
+            NAMES[k],
+            BANDS[b],
+            mix * 100.0
+        );
+    }
+}
+
 /// The rack, the band tabs and the shaper's on toggle.
 fn rack(gui: &mut Gui, ui: &mut Ui) {
     let r = at(layout::RACK);
@@ -585,6 +636,7 @@ pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
     ensure_library(gui);
     presets(gui, ui);
     rack(gui, ui);
+    wave_view(gui, ui);
     mix_knob(gui, ui);
     clamp(gui, ui, setter);
 }

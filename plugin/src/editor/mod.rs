@@ -100,8 +100,10 @@ pub struct Gui {
     pub sb_band: usize,
     /// The last Gross Beat preset loaded from the header.
     pub gb_preset: String,
-    /// The shape mix knob drag: the start value and the pointer travel.
+    /// The shape mix knob drag and the wave view's band mix drag: the start value and the
+    /// pointer travel.
     pub sb_mix_drag: Option<(f32, f32)>,
+    pub sb_band_drag: Option<(f32, f32)>,
     /// The code-exact frame of the open editor window.
     frame: frame::FrameCache,
 }
@@ -146,6 +148,7 @@ impl Gui {
             sb_band: 1,
             gb_preset: "(current)".into(),
             sb_mix_drag: None,
+            sb_band_drag: None,
             frame: frame::FrameCache::default(),
         }
     }
@@ -157,6 +160,7 @@ impl Gui {
         self.knob_drag = None;
         self.scratch_drag = None;
         self.sb_mix_drag = None;
+        self.sb_band_drag = None;
     }
 
     /// Selects shaper `k` in the ShaperBox section and shows the band its split selects.

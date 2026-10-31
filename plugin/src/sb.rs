@@ -145,6 +145,50 @@ impl Shared {
         }
     }
 
+    /// Sets band `b`'s mix of shaper `k`; `push` rebuilds the processors (at the end of a drag).
+    pub fn set_band_mix(&self, k: usize, b: usize, v: f32, push: bool) {
+        {
+            let mut m = self.model.lock();
+            let Some(band) = m.tree.as_mut().and_then(|t| band_tree(t, k, b)) else {
+                return;
+            };
+            set_leaf(band, "float", "mix", Var::Double(v as f64));
+        }
+        if push {
+            self.push();
+        }
+    }
+
+    /// Steps the length of band `b`'s first LFO of shaper `k` through the sync divisions.
+    pub fn step_lfo_length(&self, k: usize, b: usize, step: i32) {
+        {
+            let mut m = self.model.lock();
+            let Some(band) = m.tree.as_mut().and_then(|t| band_tree(t, k, b)) else {
+                return;
+            };
+            let Some(lfo) = band
+                .children
+                .iter_mut()
+                .find(|c| c.kind.starts_with("Section"))
+                .and_then(|sec| sec.children.iter_mut().find(|c| has_id(c, "lfo")))
+            else {
+                return;
+            };
+            let now = lfo
+                .children
+                .iter()
+                .find(|c| has_id(c, "length"))
+                .and_then(|c| match c.prop("value") {
+                    Some(Var::Int(v)) => Some(*v),
+                    _ => None,
+                })
+                .unwrap_or(backspin_shaperbox::state::Lfo::default().length);
+            let max = backspin_shaperbox::wave::LENGTHS.len() as i32 - 1;
+            set_leaf(lfo, "int", "length", Var::Int((now + step).clamp(0, max)));
+        }
+        self.push();
+    }
+
     /// Turns shaper `k` on or off (on also makes it visible: the plugin processes visible shapers
     /// only).
     pub fn set_shaper(&self, k: usize, on: bool) {
@@ -186,6 +230,36 @@ pub fn embedded() -> Option<&'static backspin_presets::Embedded> {
 /// The shape preset library: the local ShaperBox 3 library, else the embedded one.
 pub fn library() -> Vec<backspin_presets::Group> {
     backspin_presets::shape_library(embedded())
+}
+
+fn has_id(t: &Tree, id: &str) -> bool {
+    matches!(t.prop("id"), Some(Var::String(x)) if x == id)
+}
+
+/// Sets the `<kind id=.. value=..>` leaf `id` among `t`'s children, adding it when missing.
+fn set_leaf(t: &mut Tree, kind: &str, id: &str, v: Var) {
+    match t.children.iter_mut().find(|c| has_id(c, id)) {
+        Some(leaf) => match leaf.props.iter_mut().find(|(k, _)| k == "value") {
+            Some((_, old)) => *old = v,
+            None => leaf.props.push(("value".into(), v)),
+        },
+        None => t.children.push(Tree {
+            kind: kind.into(),
+            props: vec![("id".into(), Var::String(id.into())), ("value".into(), v)],
+            children: Vec::new(),
+        }),
+    }
+}
+
+/// Band `b` of shaper `k` in a state tree.
+fn band_tree(tree: &mut Tree, k: usize, b: usize) -> Option<&mut Tree> {
+    let name = backspin_shaperbox::state::SHAPER_IDS[k];
+    let sh = tree.children.iter_mut().find(|c| has_id(c, name))?;
+    sh.children
+        .iter_mut()
+        .find(|c| has_id(c, "bands"))?
+        .children
+        .get_mut(b)
 }
 
 /// Sets the `<type id=.. value=..>` leaf `id` of the shaper `k` in a state tree, adding it after
@@ -245,5 +319,33 @@ mod tests {
             );
         }
         eprintln!("{} shape presets embedded", p.shapes.len());
+    }
+
+    /// The band mix and LFO length setters edit the state the processors are built from.
+    #[test]
+    fn band_edits_reach_the_state() {
+        let lib = library();
+        let Some(all) = lib.first() else { return };
+        let (shared, _audio) = new();
+        // A preset with a visible shaper whose middle band has an LFO section.
+        let found = all.presets.iter().take(200).find_map(|p| {
+            let tree = read_preset(&p.bytes()?).ok()?;
+            let s = State::from_tree(&tree);
+            let k = (0..16)
+                .find(|&k| s.shapers[k].visible && !s.shapers[k].bands[1].sections.is_empty())?;
+            Some((tree, k, s.shapers[k].bands[1].sections[0].lfo.length))
+        });
+        let Some((tree, k, length)) = found else {
+            return;
+        };
+        shared.model.lock().tree = Some(tree);
+        shared.set_band_mix(k, 1, 0.25, false);
+        shared.step_lfo_length(k, 1, if length > 0 { -1 } else { 1 });
+        let s = shared.model.lock().state();
+        assert_eq!(s.shapers[k].bands[1].mix, 0.25);
+        assert_eq!(
+            s.shapers[k].bands[1].sections[0].lfo.length,
+            if length > 0 { length - 1 } else { 1 }
+        );
     }
 }
