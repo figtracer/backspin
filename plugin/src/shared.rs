@@ -54,6 +54,8 @@ pub struct Status {
     /// Set when the audio thread changed a parameter (MIDI slot selection), so the editor can tell
     /// the host.
     pub params_changed: AtomicBool,
+    /// Clamp's meter: the output and input levels of the last window (f32 bits).
+    pub clamp_meter: [AtomicU32; 2],
 }
 
 impl Status {

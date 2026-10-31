@@ -42,6 +42,9 @@ pub struct Backspin {
     next_pos: Option<f64>,
     /// Own song position in samples, for hosts without a position.
     own_pos: u64,
+    /// The Clamp clipper (built in `initialize`) and its planar work buffers.
+    clamp: Option<backspin_clamp::Clamp>,
+    clamp_buf: [Vec<f32>; 2],
 }
 
 impl Default for Backspin {
@@ -60,11 +63,54 @@ impl Default for Backspin {
             playing: false,
             next_pos: None,
             own_pos: 0,
+            clamp: None,
+            clamp_buf: [Vec::new(), Vec::new()],
         }
     }
 }
 
 impl Backspin {
+    /// Clamp, the last stage: the work buffer through the clipper when it is on. Under
+    /// flush-to-zero, since its filters otherwise decay into subnormals after a signal stops,
+    /// which is slow on x86.
+    fn process_clamp(&mut self, n: usize) {
+        let p = &self.params.clamp;
+        let Some(clamp) = self.clamp.as_mut() else {
+            return;
+        };
+        let params = backspin_clamp::Params {
+            bypass: !p.on.value(),
+            oversampling: p.oversampling.value() as u8,
+            in_db: f64::from(p.input.value()),
+            out_db: f64::from(p.output.value()),
+            ceiling_db: f64::from(p.ceiling.value()),
+            // The original steps SHAPE by 0.01 in double.
+            shape: (f64::from(p.shape.value()) * 100.0).round() / 100.0,
+            kind: p.kind.value() as u8,
+            mode: p.mode.value() as u8,
+        };
+        if params.bypass {
+            return;
+        }
+        let [l, r] = &mut self.clamp_buf;
+        let (l, r) = (&mut l[..n], &mut r[..n]);
+        for (i, f) in self.buf[..n].iter().enumerate() {
+            l[i] = f[0];
+            r[i] = f[1];
+        }
+        {
+            let _ftz = backspin_shaperbox::ftz::FlushToZero::new();
+            clamp.process(l, r, &params);
+        }
+        for (i, f) in self.buf[..n].iter_mut().enumerate() {
+            *f = [l[i], r[i]];
+        }
+        let (post, pre) = clamp.meter();
+        let meter = &self.shared.status.clamp_meter;
+        meter[0].store(post.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        meter[1].store(pre.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// The song position in ticks, `offset` samples after the block start.
     fn ticks(&self, pos_beats: Option<f64>, offset: usize) -> f64 {
         let beats = match pos_beats {
@@ -166,6 +212,8 @@ impl Plugin for Backspin {
         // Commands sent before this point are already in the model.
         while self.queues.commands.pop().is_ok() {}
         self.buf = vec![[0.0; 2]; block];
+        self.clamp = Some(backspin_clamp::Clamp::new(buffer_config.sample_rate, block));
+        self.clamp_buf = [vec![0.0; block], vec![0.0; block]];
         self.playing = false;
         self.next_pos = None;
         self.own_pos = 0;
@@ -275,6 +323,7 @@ impl Plugin for Backspin {
                 },
             );
         }
+        self.process_clamp(n);
         let slices = buffer.as_slice();
         for (i, f) in self.buf[..n].iter().enumerate() {
             slices[0][i] = f[0];

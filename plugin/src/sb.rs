@@ -239,7 +239,10 @@ mod tests {
             assert!(read_preset(data).is_ok(), "{name}");
         }
         for (name, items) in &p.groups {
-            assert!(items.iter().all(|&i| (i as usize) < p.shapes.len()), "{name}");
+            assert!(
+                items.iter().all(|&i| (i as usize) < p.shapes.len()),
+                "{name}"
+            );
         }
         eprintln!("{} shape presets embedded", p.shapes.len());
     }

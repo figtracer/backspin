@@ -45,6 +45,74 @@ pub struct BackspinParams {
     pub hold: IntParam,
     #[id = "scratch"]
     pub scratch: IntParam,
+    /// The Clamp clipper at the end of the chain.
+    #[nested(group = "Clamp")]
+    pub clamp: ClampParams,
+}
+
+/// Clamp's parameters (the ranges of the original's), with ids prefixed `clamp_`.
+#[derive(Params)]
+pub struct ClampParams {
+    /// Off by default, so the chain sounds as before until it is turned on.
+    #[id = "clamp_on"]
+    pub on: BoolParam,
+    #[id = "clamp_oversampling"]
+    pub oversampling: IntParam,
+    #[id = "clamp_in"]
+    pub input: FloatParam,
+    #[id = "clamp_out"]
+    pub output: FloatParam,
+    #[id = "clamp_ceiling"]
+    pub ceiling: FloatParam,
+    #[id = "clamp_shape"]
+    pub shape: FloatParam,
+    #[id = "clamp_type"]
+    pub kind: IntParam,
+    #[id = "clamp_mode"]
+    pub mode: IntParam,
+}
+
+/// The OVERSAMPLING, TYPE and MODE items.
+pub const CLAMP_OVERSAMPLING: [&str; 5] = ["Off", "2x", "4x", "8x", "16x"];
+pub const CLAMP_TYPES: [&str; 2] = ["Type A", "Type B"];
+pub const CLAMP_MODES: [&str; 6] = ["LR", "L", "R", "MS", "M", "S"];
+
+impl Default for ClampParams {
+    fn default() -> Self {
+        let db = |name: &str, default: f32, min: f32, max: f32| {
+            FloatParam::new(name, default, FloatRange::Linear { min, max })
+                .with_step_size(0.5)
+                .with_unit(" dB")
+        };
+        let items = |name: &str, list: &'static [&'static str]| {
+            IntParam::new(
+                name,
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: list.len() as i32 - 1,
+                },
+            )
+            .with_value_to_string(Arc::new(move |v| {
+                list[v.clamp(0, list.len() as i32 - 1) as usize].into()
+            }))
+        };
+        Self {
+            on: BoolParam::new("Clamp", false),
+            oversampling: items("Clamp oversampling", &CLAMP_OVERSAMPLING),
+            input: db("Clamp in", 0.0, -24.0, 24.0),
+            output: db("Clamp out", 0.0, -24.0, 24.0),
+            ceiling: db("Clamp ceiling", 0.0, -48.0, 0.0),
+            shape: FloatParam::new(
+                "Clamp shape",
+                1.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_step_size(0.01),
+            kind: items("Clamp type", &CLAMP_TYPES),
+            mode: items("Clamp mode", &CLAMP_MODES),
+        }
+    }
 }
 
 impl BackspinParams {
@@ -78,6 +146,7 @@ impl BackspinParams {
             tension: p(6),
             hold: p(7),
             scratch: p(8),
+            clamp: ClampParams::default(),
         }
     }
 

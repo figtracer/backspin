@@ -1,0 +1,9 @@
+[package]
+name = "backspin-clamp"
+description = "The Clamp clipper: gain staging, two waveshapers, the iPlug2 HIIR oversampler and the level meter."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
