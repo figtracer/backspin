@@ -82,8 +82,8 @@ pub struct SbModel {
     /// The selected band 0..2 and which bands the split makes active.
     pub band: usize,
     pub bands_active: [bool; 3],
-    /// The selected band's first LFO: its table (one period) and points (`x` in [0, 1),
-    /// `y` in [-1, 1]); empty when the shaper has no LFO.
+    /// The selected band's first LFO: its table (one period) and its points (`x` in [0, 1),
+    /// `y` the control value); empty when the shaper has no LFO.
     pub table: Vec<f32>,
     pub points: Vec<(f32, f32)>,
     /// The readout in the wave view's corner.
@@ -284,8 +284,11 @@ fn wave(dib: &mut Dib, w: i32, h: i32, m: &SbModel, text: &mut dyn Text) {
             a.line_to(x as f64 + 0.5, ys(at(x)));
         }
         a.draw_path(DrawPath::Stroke);
-        for &(px, py) in &m.points {
-            let (cx, cy) = ((px as f64 * fw) as i32, ys(py) as i32);
+        // Soft points (knot multiplicity 1) are control points the curve passes near, not
+        // through; each marker sits on the curve at its point's position, where the wave is.
+        for &(px, _) in &m.points {
+            let i = ((px * n as f32) as usize).min(n - 1);
+            let (cx, cy) = ((px as f64 * fw) as i32, ys(m.table[i]) as i32);
             dib.fill_rect(Rect::new(cx - 2, cy - 2, cx + 3, cy + 3), 0xff171f24, 0x100);
             dib.frame_rect(Rect::new(cx - 2, cy - 2, cx + 3, cy + 3), colour, 0x100, 1);
         }
