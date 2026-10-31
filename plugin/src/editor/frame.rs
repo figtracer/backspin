@@ -1,12 +1,15 @@
 //! The code-exact frame ([`backspin_ui::paint`]) shown as the editor's background texture.
 //!
-//! Text goes through an interim overlay that draws egui text and the vector glyphs at the rects
-//! the painters hand over, until the QuickFontCache port replaces it.
+//! Text goes through the QuickFontCache port ([`QfcText`]). Two kinds of draws go to an egui
+//! overlay instead: the shape section's own glyphs (private code points no font has), and the
+//! IL glyph icons when the FL glyph fonts are not available on this machine.
 
 use super::paint::{Glyph, font, glyph};
 use super::{Gui, HOLD_ITEMS, SYNC_ITEMS};
 use backspin_gfx::{Dib, Rect as DRect};
-use backspin_ui::{Font, HEIGHT, Model, PANEL, SB_HEIGHT, SbModel, Text, WIDTH, paint, paint_sb};
+use backspin_ui::{
+    EnvView, Font, HEIGHT, Model, PANEL, QfcText, SB_HEIGHT, SbModel, Text, WIDTH, paint, paint_sb,
+};
 use nih_plug_egui::egui::{
     self, Align2, Color32, ColorImage, Painter, Rect, TextureHandle, TextureOptions, pos2, vec2,
 };
@@ -44,6 +47,77 @@ impl Text for Overlay {
             flags,
             colour,
         });
+    }
+}
+
+/// The IL glyph fonts.
+fn glyph_font(f: Font) -> bool {
+    matches!(
+        f,
+        Font::ButtonGlyph
+            | Font::MapType
+            | Font::IlGlyphs
+            | Font::FreezeGlyph
+            | Font::MenuGlyph
+            | Font::KeyHeldGlyph
+            | Font::OneShotGlyph
+    )
+}
+
+/// Sends the painters' text to QuickFontCache, or to the overlay (see the module doc).
+struct Router<'a> {
+    qfc: &'a mut QfcText,
+    overlay: Overlay,
+    /// Every font resolved to its own file (the FL fonts are present).
+    complete: bool,
+}
+
+impl Router<'_> {
+    fn to_overlay(&self, font: Font, text: &str) -> bool {
+        let private = [
+            backspin_ui::sb::GLYPH_WAVE,
+            backspin_ui::sb::GLYPH_PREV,
+            backspin_ui::sb::GLYPH_NEXT,
+            backspin_ui::sb::GLYPH_POWER,
+        ];
+        private.contains(&text) || (!self.complete && glyph_font(font))
+    }
+}
+
+impl Text for Router<'_> {
+    fn draw(
+        &mut self,
+        dib: &mut Dib,
+        font: Font,
+        text: &str,
+        r: DRect,
+        flags: u32,
+        colour: u32,
+        alpha: i32,
+    ) {
+        if self.to_overlay(font, text) {
+            self.overlay.draw(dib, font, text, r, flags, colour, alpha);
+        } else {
+            self.qfc.draw(dib, font, text, r, flags, colour, alpha);
+        }
+    }
+
+    fn draw_f(
+        &mut self,
+        dib: &mut Dib,
+        font: Font,
+        text: &str,
+        r: [f64; 4],
+        flags: u32,
+        colour: u32,
+        alpha: i32,
+    ) {
+        if self.to_overlay(font, text) {
+            self.overlay
+                .draw_f(dib, font, text, r, flags, colour, alpha);
+        } else {
+            self.qfc.draw_f(dib, font, text, r, flags, colour, alpha);
+        }
     }
 }
 
@@ -93,6 +167,13 @@ fn model(gui: &Gui) -> Model {
         item(&SYNC_ITEMS, slot.trigger_sync),
         item(&SYNC_ITEMS, slot.position_sync),
     ];
+    out.params = std::array::from_fn(|i| gui.param(i));
+    out.env_points = slot.env.points.clone();
+    out.env_view = EnvView {
+        px_per_beat: 525.0 / slot.env.length.max(1e-9),
+        ..EnvView::default()
+    };
+    out.watermark = "Backspin".into();
     out
 }
 
@@ -132,7 +213,7 @@ fn draw_item(p: &Painter, it: &Item) {
     );
     let c = colour(it.colour);
     let vcentre = it.flags & 0x8 != 0;
-    if matches!(it.font, Font::ButtonGlyph | Font::MapType | Font::IlGlyphs)
+    if glyph_font(it.font)
         && let Some(g) = il_glyph(&it.text)
     {
         let size = if matches!(it.font, Font::IlGlyphs) {
@@ -185,6 +266,9 @@ pub struct FrameCache {
     shown: Option<(Model, SbModel)>,
     overlay: Overlay,
     tex: Option<TextureHandle>,
+    /// The text renderer, kept between repaints for its glyph cache (behind a mutex because
+    /// the editor state must be `Sync`; only the GUI thread locks it).
+    text: parking_lot::Mutex<Option<QfcText>>,
 }
 
 /// Paints the frame (when its models changed) and the text overlay.
@@ -193,11 +277,19 @@ pub fn show(gui: &mut Gui, ui: &egui::Ui, cache: &mut FrameCache) {
     if cache.tex.is_none() || cache.shown.as_ref() != Some(&models) {
         let (w, h) = (WIDTH, HEIGHT + SB_HEIGHT);
         let mut dib = Dib::new(w, h, PANEL);
-        let mut overlay = Overlay::default();
-        paint(&mut dib, &models.0, &mut overlay);
+        let mut guard = cache.text.lock();
+        let qfc = guard.get_or_insert_with(QfcText::new);
+        let complete = qfc.complete();
+        let mut text = Router {
+            qfc,
+            overlay: Overlay::default(),
+            complete,
+        };
+        paint(&mut dib, &models.0, &mut text);
         dib.move_origin(0, HEIGHT);
-        paint_sb(&mut dib, &models.1, &mut overlay);
+        paint_sb(&mut dib, &models.1, &mut text);
         dib.move_origin(0, -HEIGHT);
+        let overlay = text.overlay;
         let image = ColorImage {
             size: [w as usize, h as usize],
             pixels: dib

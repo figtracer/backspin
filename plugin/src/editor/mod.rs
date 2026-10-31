@@ -16,7 +16,7 @@ use backspin_engine::envelope::tools::ToolError;
 use backspin_engine::{Engine, PARAMS, param_text};
 use nih_plug::prelude::{Editor, ParamSetter};
 use nih_plug_egui::egui::{
-    self, Align2, Color32, Context, Id, PointerButton, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2,
+    self, Color32, Context, Id, PointerButton, Pos2, Rect, Sense, Ui, pos2, vec2,
 };
 use nih_plug_egui::{EguiState, create_egui_editor};
 use paint::*;
@@ -38,7 +38,6 @@ pub const SYNC_ITEMS: [&str; 6] = [
     "Off", "1/4 beat", "1/2 beat", "1 beat", "2 beats", "4 beats",
 ];
 pub const HOLD_ITEMS: [&str; 3] = ["Off", "Last", "Next"];
-const GROUP_NAMES: [&str; 2] = ["Time", "Volume"];
 /// The width of the left column (S(266)).
 const COLUMN: f32 = 266.0;
 
@@ -315,7 +314,6 @@ impl Gui {
 
     /// The left column: header, knobs, HOLD, the scratch clock and the two slot grids.
     fn left_column(&mut self, ui: &mut Ui, setter: &ParamSetter, h: f32) {
-        let p = ui.painter().clone();
         let clock = self.shared.model.lock().view_scratch != 0;
 
         // Time and volume mix knobs.
@@ -324,23 +322,17 @@ impl Gui {
             setter,
             2,
             Rect::from_min_size(pos2(7.0, 5.0), vec2(48.0, 48.0)),
-            TIME_MIX,
-            true,
         );
         self.knob(
             ui,
             setter,
             3,
             Rect::from_min_size(pos2(7.0, h - 55.0), vec2(48.0, 48.0)),
-            VOLUME,
-            true,
         );
 
         // Options button.
         let opt = Rect::from_min_size(pos2(7.0, 66.0), vec2(20.0, 20.0));
         let r = ui.interact(opt, Id::new("options_btn"), Sense::click());
-        p.rect_filled(opt, 4.0, rgb(0x2a353d));
-        glyph(&p, opt.shrink(2.0), Glyph::Options, ORANGE);
         if r.hovered() {
             self.hint = "Options".into();
         }
@@ -350,22 +342,6 @@ impl Gui {
         let hold = Rect::from_min_size(pos2(109.0, 60.0), vec2(63.0, 30.0));
         let r = ui.interact(hold, Id::new("hold_btn"), Sense::click());
         let on = self.param(7) > 0;
-        p.rect_filled(hold, 6.0, if on { rgb(0x2c3a24) } else { rgb(0x29333a) });
-        if on {
-            p.rect_stroke(
-                hold.shrink(1.0),
-                6.0,
-                Stroke::new(1.5f32, HOLD_ON),
-                egui::StrokeKind::Middle,
-            );
-        }
-        p.text(
-            hold.center(),
-            Align2::CENTER_CENTER,
-            "HOLD",
-            font(16.0),
-            if on { HOLD_ON } else { HOLD_TEXT },
-        );
         if r.clicked() {
             self.set_param(setter, 7, if on { 0 } else { 1 });
         }
@@ -404,53 +380,23 @@ impl Gui {
             setter,
             4,
             Rect::from_min_size(pos2(56.0, y), vec2(42.0, 42.0)),
-            VOLUME,
-            false,
         );
         self.knob(
             ui,
             setter,
             5,
             Rect::from_min_size(pos2(106.0, y), vec2(42.0, 42.0)),
-            VOLUME,
-            false,
         );
         self.knob(
             ui,
             setter,
             6,
             Rect::from_min_size(pos2(159.0, y - 4.0), vec2(48.0, 48.0)),
-            VOLUME,
-            false,
         );
-        for (x, s) in [(77.0, "ATT"), (127.0, "REL"), (183.0, "TNS")] {
-            p.text(
-                pos2(x, h - 70.0),
-                Align2::CENTER_CENTER,
-                s,
-                font(11.0),
-                LABEL,
-            );
-        }
 
         // SlotZoom: toggle the envelope.
         let zr = Rect::from_min_size(pos2(8.0, h - 88.0), vec2(24.0, 19.0));
         let r = ui.interact(zr, Id::new("slot_zoom"), Sense::click());
-        p.rect_filled(
-            zr,
-            3.0,
-            if self.compact {
-                rgb(0x25313b)
-            } else {
-                rgb(0x2a353d)
-            },
-        );
-        glyph(
-            &p,
-            zr.shrink(3.0),
-            Glyph::Zoom,
-            if self.compact { ORANGE } else { rgb(0xb9bfc3) },
-        );
         if r.hovered() {
             self.hint = "Toggle Envelope Visibility".into();
         }
@@ -480,15 +426,7 @@ impl Gui {
 
     /// A TVectorWheel bound to parameter `i`: vertical drag (Ctrl for 16x finer), mouse wheel,
     /// right-click WheelMenu.
-    fn knob(
-        &mut self,
-        ui: &mut Ui,
-        setter: &ParamSetter,
-        i: usize,
-        r: Rect,
-        fill: Color32,
-        gap_right: bool,
-    ) {
+    fn knob(&mut self, ui: &mut Ui, setter: &ParamSetter, i: usize, r: Rect) {
         let resp = ui.interact(r, Id::new(("knob", i)), Sense::click_and_drag());
         let info = PARAMS[i];
         let range = (info.max - info.min) as f32;
@@ -532,16 +470,6 @@ impl Gui {
             let text = param_text(i, value, |_, _| String::new());
             self.hint = format!("{}: {}", info.name, text);
         }
-        let t = (value - info.min) as f32 / range;
-        knob(
-            ui.painter(),
-            r,
-            t,
-            fill,
-            i == 6,
-            gap_right,
-            self.knob_drag.map(|d| d.0) == Some(i),
-        );
         menus::wheel_menu(self, ui, setter, &resp, i);
     }
 
@@ -590,17 +518,6 @@ impl Gui {
                 param_text(8, self.param(8), |_, _| String::new())
             );
         }
-        let playing = self.shared.status.playing.load(Ordering::Relaxed);
-        let value = self.scratch_drag.map_or(self.param(8) as f32, |d| d.1);
-        let live = playing.then_some(value);
-        scratch_clock(
-            ui.painter(),
-            r,
-            value,
-            group_color(self.group()),
-            self.scratch_drag.is_some(),
-            live,
-        );
         menus::wheel_menu(self, ui, setter, &resp, 8);
     }
 
@@ -734,7 +651,6 @@ impl Gui {
 
     /// The bar under the envelope: slot name and the slot settings of the edited slot.
     fn slot_bar(&mut self, ui: &mut Ui, setter: &ParamSetter, h: f32) {
-        let p = ui.painter().clone();
         let group = self.group();
         let index = self.edited[group];
         let slot = self.shared.model.lock().banks[group].slots[index].clone();
@@ -743,14 +659,6 @@ impl Gui {
         // NameLabel: click to rename.
         let nr = Rect::from_min_size(pos2(298.0, y), vec2(157.0, 15.0));
         let r = ui.interact(nr, Id::new("name_label"), Sense::click());
-        let text = format!("{}: {}", GROUP_NAMES[group], slot.display_name(index));
-        p.with_clip_rect(nr).text(
-            pos2(nr.min.x, nr.center().y),
-            Align2::LEFT_CENTER,
-            text,
-            font(12.0),
-            group_color(group),
-        );
         if r.clicked() {
             {
                 let name = self.shared.model.lock().banks[group].slots[index]

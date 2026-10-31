@@ -3,3 +3,5 @@ target/
 *.clap
 .DS_Store
 .amp/
+scripts/__pycache__/
+scripts/cache/

@@ -9,8 +9,7 @@ use backspin_engine::envelope::{Cursor, Envelope};
 use backspin_engine::time_text;
 use nih_plug::prelude::ParamSetter;
 use nih_plug_egui::egui::{
-    self, Align2, Color32, CursorIcon, Id, Key, PointerButton, Pos2, Rect, Sense, Shape, Stroke,
-    Ui, pos2,
+    self, CursorIcon, Id, Key, PointerButton, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2,
 };
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
@@ -718,7 +717,9 @@ fn shortcuts(gui: &mut Gui, ui: &Ui, resp: &egui::Response, env: &mut Envelope) 
     changed
 }
 
-/// Draws the editor (ui.md 5.4).
+/// Draws what the code-exact frame does not (it paints the background, grid, watermark, axis
+/// tags, curve and points): the freeze tint, the other group's ghost, hover feedback and, below,
+/// the playback locator.
 fn draw(
     gui: &mut Gui,
     ui: &Ui,
@@ -729,77 +730,8 @@ fn draw(
     index: usize,
 ) {
     let p = ui.painter().with_clip_rect(v.r);
-    let mut bg = if gui.invert_grid {
-        rgb(0x344b5b)
-    } else {
-        rgb(0x294050)
-    };
     if gui.freeze {
-        bg = mix(bg, rgb(0x2fc8fb), 32.0 / 256.0);
-    }
-    if gui.gradient {
-        gradient_rect(&p, v.r, lighten(bg, 0x18), bg);
-    } else {
-        p.rect_filled(v.r, 0.0, bg);
-    }
-    let shade = |k: i32| {
-        if gui.invert_grid {
-            lighten(bg, -k)
-        } else {
-            lighten(bg, k)
-        }
-    };
-    // Vertical grid: snap steps, beats, the bar ends.
-    let (gx, _) = grid(gui);
-    let steps = (v.len / gx).round() as i32;
-    for k in 0..=steps {
-        let pos = k as f64 * gx;
-        let x = v.x(pos).round() + 0.5;
-        let strength = if pos.fract() == 0.0 {
-            if (pos % 4.0) == 0.0 { 0x34 } else { 0x18 }
-        } else {
-            8
-        };
-        p.line_segment(
-            [pos2(x, v.r.min.y), pos2(x, v.r.max.y)],
-            Stroke::new(1.0f32, shade(strength)),
-        );
-    }
-    // Horizontal grid: eighths of the range (one beat of delay each on the time lane).
-    for k in 1..8 {
-        let y = v.y(1.0 - k as f64 / 8.0).round() + 0.5;
-        p.line_segment(
-            [pos2(v.r.min.x, y), pos2(v.r.max.x, y)],
-            Stroke::new(1.0f32, shade(if k == 4 { 0x18 } else { 8 })),
-        );
-    }
-    // Watermark.
-    let wm = p.layout_no_wrap("Backspin".into(), font(46.0), rgba(0x000000, 0x32));
-    let at = pos2(
-        v.r.max.x - 10.0 - wm.size().x,
-        v.r.max.y - 5.0 - wm.size().y,
-    );
-    if v.r.height() > 0.85 * wm.size().y && v.r.width() > wm.size().x * 0.5 {
-        p.galley(at, wm, rgba(0x000000, 0x32));
-    }
-    // The -1..-7 tags of the time axis.
-    if group == 0 {
-        for k in 1..8 {
-            let y = v.y(1.0 - k as f64 / 8.0);
-            let (l, t, rr, b) = (v.r.min.x, y - 6.0, v.r.min.x + 22.0, y + 6.0);
-            p.add(Shape::convex_polygon(
-                vec![pos2(l, t), pos2(rr, t), pos2(l + 0.6 * 22.0, b), pos2(l, b)],
-                rgb(0x25313b),
-                Stroke::NONE,
-            ));
-            p.text(
-                pos2(l + 3.0, y),
-                Align2::LEFT_CENTER,
-                format!("-{k}"),
-                font(9.5),
-                rgb(0x8595a0),
-            );
-        }
+        p.rect_filled(v.r, 0.0, rgba(0x2fc8fb, 32));
     }
     // The other group's envelope as a ghost line.
     if let Some(g) = ghost {
@@ -810,43 +742,23 @@ fn draw(
         };
         p.add(Shape::line(columns(g, v), Stroke::new(1.0f32, c)));
     }
-    // The envelope.
     let gc = group_color(group);
-    p.add(Shape::line(columns(env, v), Stroke::new(1.5f32, gc)));
     if !gui.freeze {
         let pc = lighten(gc, 0x20);
-        for i in 1..env.points.len() {
-            if let Some(q) = handle_pos(env, v, i) {
-                let hovered = gui.env.hover == Hover::Handle(i);
-                let rad = if hovered {
-                    env.points[i].tension.abs() * 1.9 + 2.5
-                } else {
-                    3.5
-                };
-                p.circle_stroke(
-                    q,
-                    rad,
-                    Stroke::new(1.0f32, alpha(pc, if hovered { 255 } else { 150 })),
-                );
-            }
-        }
-        let xs: Vec<f32> = (0..env.points.len()).map(|i| v.x(env.abs_pos(i))).collect();
-        for (i, q) in env.points.iter().enumerate() {
-            let c = pos2(xs[i], v.y(q.value as f64));
-            let crowd = xs.iter().filter(|&&x| (x - xs[i]).abs() <= 3.0).count() as f32;
-            let a = (1.0 - (crowd - 4.0).max(0.0) / 28.0).clamp(0.1, 1.0);
-            let hovered = gui.env.hover == Hover::Point(i);
-            if hovered {
-                p.circle_filled(c, 9.0, rgba(0xffffff, 0x20));
-            }
-            p.circle_filled(
-                c,
-                2.65 + if hovered { 0.9 } else { 0.0 },
-                alpha(pc, (a * 255.0) as u8),
+        if let Hover::Handle(i) = gui.env.hover
+            && let Some(q) = handle_pos(env, v, i)
+        {
+            p.circle_stroke(
+                q,
+                env.points[i].tension.abs() * 1.9 + 2.5,
+                Stroke::new(1.0f32, pc),
             );
-            if q.selected() {
-                p.circle_stroke(c, 4.0, Stroke::new(1.5f32, SELECT_RING));
-            }
+        }
+        if let Hover::Point(i) = gui.env.hover
+            && let Some(q) = env.points.get(i)
+        {
+            let c = pos2(v.x(env.abs_pos(i)), v.y(q.value as f64));
+            p.circle_filled(c, 9.0, rgba(0xffffff, 0x20));
         }
     }
     // The playback locator with its fading trail.
@@ -877,5 +789,4 @@ fn draw(
     } else {
         trail.clear();
     }
-    let _: Color32 = bg;
 }

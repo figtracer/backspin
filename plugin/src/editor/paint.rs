@@ -29,22 +29,12 @@ pub fn alpha(c: Color32, a: u8) -> Color32 {
     Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
 }
 
-/// Mixes `c` towards `to` by `t` (0..1).
-pub fn mix(c: Color32, to: Color32, t: f32) -> Color32 {
-    let f = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
-    Color32::from_rgb(f(c.r(), to.r()), f(c.g(), to.g()), f(c.b(), to.b()))
-}
-
 pub const PANEL: Color32 = rgb(0x344b5b);
 pub const TIME: Color32 = rgb(0xa8ff70);
 pub const VOLUME: Color32 = rgb(0xffb870);
 pub const TIME_MIX: Color32 = rgb(0x86bf69);
 pub const KNOB_RAIL: Color32 = rgb(0x3f484d);
 pub const KNOB_PRESSED: Color32 = rgb(0xced0d1);
-pub const LABEL: Color32 = rgb(0xb9c5c4);
-pub const ORANGE: Color32 = rgb(0xff9637);
-pub const HOLD_ON: Color32 = rgb(0x83e32b);
-pub const HOLD_TEXT: Color32 = rgb(0x9fa8ad);
 pub const SELECT_RING: Color32 = rgb(0xa8e44a);
 
 /// The colour of a group (bank): time green, volume orange.
@@ -79,10 +69,6 @@ pub enum Glyph {
     OneShot,
     /// U+F05F: combo arrow.
     Down,
-    /// U+F024: toggle envelope visibility.
-    Zoom,
-    /// ILIndex 16: options.
-    Options,
     /// U+F463: the time pill.
     Clock,
     /// U+F0B8: the volume pill.
@@ -196,24 +182,6 @@ pub fn glyph(p: &Painter, r: Rect, g: Glyph, c: Color32) {
                 Stroke::NONE,
             ));
         }
-        Glyph::Zoom => {
-            let v = vec![
-                pos2(ctr.x - 0.7 * w, ctr.y + 0.3 * w),
-                pos2(ctr.x - 0.3 * w, ctr.y - 0.4 * w),
-                pos2(ctr.x + 0.1 * w, ctr.y + 0.2 * w),
-                pos2(ctr.x + 0.4 * w, ctr.y - 0.2 * w),
-                pos2(ctr.x + 0.7 * w, ctr.y + 0.3 * w),
-            ];
-            p.add(Shape::line(v, s));
-        }
-        Glyph::Options => {
-            p.circle_stroke(ctr, 0.35 * w, s);
-            for k in 0..6 {
-                let a = k as f32 * PI / 3.0;
-                let d = vec2(a.cos(), a.sin());
-                p.line_segment([ctr + d * 0.45 * w, ctr + d * 0.7 * w], s);
-            }
-        }
         Glyph::Clock => {
             p.circle_stroke(ctr, 0.55 * w, s);
             p.line_segment([ctr, ctr + vec2(0.0, -0.35 * w)], s);
@@ -299,70 +267,4 @@ pub fn knob(
         [c + d * rad * 0.15, c + d * rad * 0.55],
         Stroke::new(2.0f32, lighten(KNOB_RAIL, 0x60)),
     );
-}
-
-/// The scratch clock (TScratchWheel paint 0x60690). `value` is parameter 8 (65536 = no offset),
-/// `live` the live scratch position while playing.
-pub fn scratch_clock(
-    p: &Painter,
-    r: Rect,
-    value: f32,
-    hand: Color32,
-    pressed: bool,
-    live: Option<f32>,
-) {
-    p.rect_filled(r, 0.0, Color32::BLACK);
-    let inner = r.shrink(1.0);
-    p.rect_filled(inner, 0.0, rgb(0x4e5962));
-    let g = r.shrink(2.0);
-    let n = 12;
-    for i in 0..n {
-        let t = i as f32 / n as f32;
-        let band = Rect::from_min_max(
-            pos2(g.min.x, g.min.y + g.height() * t),
-            pos2(g.max.x, g.min.y + g.height() * (t + 1.0 / n as f32)),
-        );
-        p.rect_filled(band, 0.0, mix(rgb(0x7c8790), rgb(0x4e5962), t));
-    }
-    let c = r.center();
-    let s = r.width() / 72.0;
-    p.circle_stroke(c, 30.0 * s, Stroke::new(1.0f32, rgb(0x848f96)));
-    for k in 0..16 {
-        let a = k as f32 * TAU / 16.0;
-        let pt = c + vec2(a.cos(), a.sin()) * 32.0 * s;
-        p.circle_filled(
-            pt,
-            1.0 * s,
-            if k % 2 == 0 {
-                Color32::WHITE
-            } else {
-                rgb(0x99a5ad)
-            },
-        );
-    }
-    let hand_col = if pressed { Color32::WHITE } else { hand };
-    let angle = PI - value / 65536.0 * TAU;
-    let d = vec2(angle.sin(), -angle.cos());
-    p.line_segment([c, c + d * 25.0 * s], Stroke::new(1.5 * s, hand_col));
-    p.circle_filled(c + d * 25.6 * s, 2.4 * s, hand_col);
-    if let Some(l) = live {
-        let a = PI - l / 65536.0 * TAU;
-        let d = vec2(a.sin(), -a.cos());
-        p.circle_stroke(c + d * 25.6 * s, 4.8 * s, Stroke::new(1.3 * s, hand));
-    }
-}
-
-/// A vertical gradient fill of a convex path, approximated with horizontal strips clipped to
-/// the path's bounding box.
-pub fn gradient_rect(p: &Painter, r: Rect, top: Color32, bottom: Color32) {
-    let n = (r.height() / 2.0).ceil().max(1.0) as usize;
-    for i in 0..n {
-        let t0 = i as f32 / n as f32;
-        let t1 = (i + 1) as f32 / n as f32;
-        let band = Rect::from_min_max(
-            pos2(r.min.x, r.min.y + r.height() * t0),
-            pos2(r.max.x, r.min.y + r.height() * t1),
-        );
-        p.rect_filled(band, 0.0, mix(top, bottom, (t0 + t1) * 0.5));
-    }
 }
