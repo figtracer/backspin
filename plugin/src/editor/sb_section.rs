@@ -212,37 +212,47 @@ fn presets(gui: &mut Gui, ui: &mut Ui) {
     let mut pick: Option<(usize, usize)> = None;
     let mut show_group = None;
     popup_above(ui, &r, Id::new("sb_preset_popup"), |ui| {
+        // Two columns side by side; each lists its items top to bottom (a list directly inside
+        // the horizontal row would inherit its left-to-right layout).
         ui.horizontal_top(|ui| {
-            ScrollArea::vertical()
-                .id_salt("sb_groups")
-                .max_height(420.0)
-                .show(ui, |ui| {
-                    ui.set_width(190.0);
-                    for (g, grp) in lib.iter().enumerate() {
-                        let label = format!(
-                            "{}  ({})",
-                            grp.name.replace('@', " \u{203a} "),
-                            grp.presets.len()
-                        );
-                        if ui.selectable_label(g == group, label).clicked() {
-                            show_group = Some(g);
-                        }
-                    }
-                });
-            ui.separator();
-            ScrollArea::vertical()
-                .id_salt("sb_group_presets")
-                .max_height(420.0)
-                .show(ui, |ui| {
-                    ui.set_width(220.0);
-                    if let Some(grp) = lib.get(group) {
-                        for (i, p) in grp.presets.iter().enumerate() {
-                            if ui.selectable_label(Some(i) == shown, &p.name).clicked() {
-                                pick = Some((group, i));
+            ui.vertical(|ui| {
+                ui.set_width(200.0);
+                ScrollArea::vertical()
+                    .id_salt("sb_groups")
+                    .max_height(400.0)
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                            for (g, grp) in lib.iter().enumerate() {
+                                let label = format!(
+                                    "{}  ({})",
+                                    grp.name.replace('@', " \u{203a} "),
+                                    grp.presets.len()
+                                );
+                                if ui.selectable_label(g == group, label).clicked() {
+                                    show_group = Some(g);
+                                }
                             }
-                        }
-                    }
-                });
+                        });
+                    });
+            });
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_width(230.0);
+                ScrollArea::vertical()
+                    .id_salt("sb_group_presets")
+                    .max_height(400.0)
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                            if let Some(grp) = lib.get(group) {
+                                for (i, p) in grp.presets.iter().enumerate() {
+                                    if ui.selectable_label(Some(i) == shown, &p.name).clicked() {
+                                        pick = Some((group, i));
+                                    }
+                                }
+                            }
+                        });
+                    });
+            });
         });
     });
     if let Some(g) = show_group {
