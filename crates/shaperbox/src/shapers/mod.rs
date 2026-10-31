@@ -3,10 +3,13 @@
 
 pub mod crush;
 pub mod drive;
+pub mod dynamics;
+pub mod envfollow;
 pub mod filter;
 pub mod liquid;
 pub mod noise;
 pub mod pan;
+pub mod pitch;
 pub mod reverb;
 pub mod time;
 pub mod volume;
