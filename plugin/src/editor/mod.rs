@@ -1161,6 +1161,9 @@ mod snapshots {
     #[test]
     fn reopened_editor_uploads_its_frame() {
         let mut gui = gui_with(None);
+        // A library finishing its background load between frames would change the frame.
+        *gui.sb_library.lock() = Some(Vec::new());
+        gui.sb_loading = true;
         let first = Context::default();
         gui.on_open();
         assert_eq!(texture_uploads(&first, &mut gui), 1);
