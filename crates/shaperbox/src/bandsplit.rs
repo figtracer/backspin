@@ -166,11 +166,28 @@ impl Crossover {
     }
 }
 
-/// The three bands of one block; a band the split does not produce is not used.
+/// The three bands of one block; a band the split does not produce is not used. The buffers keep
+/// their capacity from block to block.
 #[derive(Clone, Default)]
 pub struct Bands {
     pub b: [Vec<[f32; 2]>; 3],
     pub produced: [bool; 3],
+}
+
+impl Bands {
+    /// Bands whose buffers hold `n` frames without reallocating.
+    pub fn with_capacity(n: usize) -> Self {
+        Self {
+            b: std::array::from_fn(|_| Vec::with_capacity(n)),
+            produced: [false; 3],
+        }
+    }
+}
+
+/// Replaces the contents of `dst` with `src`, reusing its capacity.
+fn set(dst: &mut Vec<[f32; 2]>, src: &[[f32; 2]]) {
+    dst.clear();
+    dst.extend_from_slice(src);
 }
 
 /// Bandsplit mode 0: seven crossovers F0 LP(lo), F1 LP(hi), F2 HP(lo), F3 HP(hi), F4 LP(hi),
@@ -179,6 +196,7 @@ pub struct Bands {
 pub struct Bandsplit {
     f: [Crossover; 7],
     used: [bool; 7],
+    tmp: Vec<[f32; 2]>,
 }
 
 impl Default for Bandsplit {
@@ -192,7 +210,15 @@ impl Bandsplit {
         Self {
             f: [false, false, true, true, false, true, false].map(Crossover::new),
             used: [false; 7],
+            tmp: Vec::new(),
         }
+    }
+
+    /// A split whose scratch buffer holds `n` frames without reallocating.
+    pub fn with_capacity(n: usize) -> Self {
+        let mut s = Self::new();
+        s.tmp.reserve(n);
+        s
     }
 
     /// Runs filter `i` in place; a filter idle in the previous block starts from zero.
@@ -224,67 +250,60 @@ impl Bandsplit {
         sr: f32,
         out: &mut Bands,
     ) {
-        let n = x.len();
         let (low_on, high_on) = active(low, high);
         let (low, high) = clamp_params(low, high);
         let mut used = [false; 7];
-        for b in &mut out.b {
-            b.clear();
-        }
-        out.produced = [false; 3];
+        let [lo, mid, hi] = &mut out.b;
         match (low_on, high_on) {
             (false, false) => {
-                out.b[MID].extend_from_slice(x);
-                out.produced[MID] = true;
+                set(mid, x);
+                out.produced = [false, true, false];
             }
             (true, true) if ls == 0 && hs == 0 => {
-                let mut lo = x.to_vec();
-                self.run(0, &mut lo, low, ls, sr, &mut used);
-                self.run(1, &mut lo, high, hs, sr, &mut used);
-                let mut hi = x.to_vec();
-                self.run(3, &mut hi, high, hs, sr, &mut used);
-                self.run(2, &mut hi, low, ls, sr, &mut used);
-                let mid = (0..n)
-                    .map(|i| [0, 1].map(|c| (x[i][c] - lo[i][c]) - hi[i][c]))
-                    .collect();
-                out.b = [lo, mid, hi];
+                set(lo, x);
+                self.run(0, lo, low, ls, sr, &mut used);
+                self.run(1, lo, high, hs, sr, &mut used);
+                set(hi, x);
+                self.run(3, hi, high, hs, sr, &mut used);
+                self.run(2, hi, low, ls, sr, &mut used);
+                mid.clear();
+                mid.extend(
+                    x.iter()
+                        .zip(lo.iter().zip(hi.iter()))
+                        .map(|(x, (l, h))| [0, 1].map(|c| (x[c] - l[c]) - h[c])),
+                );
                 out.produced = [true; 3];
             }
             (true, true) => {
-                let mut a = x.to_vec();
-                self.run(0, &mut a, low, ls, sr, &mut used);
-                let mut lp = a.clone();
-                self.run(4, &mut lp, high, hs, sr, &mut used);
-                self.run(5, &mut a, high, hs, sr, &mut used);
-                let lo = lp
-                    .iter()
-                    .zip(&a)
-                    .map(|(u, v)| [u[0] + v[0], u[1] + v[1]])
-                    .collect();
-                let mut c = x.to_vec();
-                self.run(2, &mut c, low, ls, sr, &mut used);
-                let mut mid = c.clone();
-                self.run(6, &mut mid, high, hs, sr, &mut used);
-                self.run(3, &mut c, high, hs, sr, &mut used);
-                out.b = [lo, mid, c];
+                let mut tmp = std::mem::take(&mut self.tmp);
+                set(lo, x);
+                self.run(0, lo, low, ls, sr, &mut used);
+                set(&mut tmp, lo);
+                self.run(4, &mut tmp, high, hs, sr, &mut used);
+                self.run(5, lo, high, hs, sr, &mut used);
+                for (a, u) in lo.iter_mut().zip(&tmp) {
+                    *a = [u[0] + a[0], u[1] + a[1]];
+                }
+                self.tmp = tmp;
+                set(hi, x);
+                self.run(2, hi, low, ls, sr, &mut used);
+                set(mid, hi);
+                self.run(6, mid, high, hs, sr, &mut used);
+                self.run(3, hi, high, hs, sr, &mut used);
                 out.produced = [true; 3];
             }
             (true, false) => {
-                let mut lo = x.to_vec();
-                self.run(0, &mut lo, low, ls, sr, &mut used);
-                let mut mid = x.to_vec();
-                self.run(2, &mut mid, low, ls, sr, &mut used);
-                out.b[LOW] = lo;
-                out.b[MID] = mid;
+                set(lo, x);
+                self.run(0, lo, low, ls, sr, &mut used);
+                set(mid, x);
+                self.run(2, mid, low, ls, sr, &mut used);
                 out.produced = [true, true, false];
             }
             (false, true) => {
-                let mut mid = x.to_vec();
-                self.run(6, &mut mid, high, hs, sr, &mut used);
-                let mut hi = x.to_vec();
-                self.run(3, &mut hi, high, hs, sr, &mut used);
-                out.b[MID] = mid;
-                out.b[HIGH] = hi;
+                set(mid, x);
+                self.run(6, mid, high, hs, sr, &mut used);
+                set(hi, x);
+                self.run(3, hi, high, hs, sr, &mut used);
                 out.produced = [false, true, true];
             }
         }

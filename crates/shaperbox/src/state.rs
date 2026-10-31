@@ -1,6 +1,7 @@
 //! The ShaperBox state as typed values (core.md section 6), read from the JUCE ValueTree.
 //! Members missing in the tree keep their defaults, as the plugin's versioned loader does.
 
+use crate::shapers::envfollow::EnvParams;
 use crate::shapers::filter::migrate_resonance_y;
 use crate::valuetree::{Tree, Var};
 use crate::wave::Point;
@@ -57,11 +58,13 @@ impl Default for Lfo {
     }
 }
 
-/// A section of a band: its id and LFO.
+/// A section of a band (`SectionEnvState`): its id, LFO and envelope follower.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Section {
     pub id: String,
     pub lfo: Lfo,
+    /// The `envelopeFollower` child (`ShaperBoxEnvelopeFollowerState`).
+    pub env: EnvParams,
 }
 
 /// One band: `mix`, its sections and its other leaves by id.
@@ -147,6 +150,9 @@ impl Default for Split {
 pub struct Shaper {
     pub visible: bool,
     pub on: bool,
+    /// The shaper-level `mode` leaf: the algorithm of the Pitch shaper (`PitchShaperMode`, 0 WSOLA,
+    /// 1 PSOLA Vocals, 2 PSOLA Drums, 3 Cyclic; default 0).
+    pub mode: i32,
     pub split: Split,
     pub bands: [Band; 3],
 }
@@ -159,6 +165,9 @@ pub struct State {
     pub module_slots: Vec<usize>,
     pub master_mix: f32,
     pub bypassed: bool,
+    /// `useConstantBaseLatency` (default true): the output always runs 16 samples late (core.md
+    /// section 1); off, it runs late by the latency of the shapers only (Drive's 16).
+    pub use_constant_base_latency: bool,
 }
 
 impl Default for State {
@@ -169,6 +178,7 @@ impl Default for State {
             module_slots: (0..16).collect(),
             master_mix: 1.0,
             bypassed: false,
+            use_constant_base_latency: true,
         }
     }
 }
@@ -236,6 +246,30 @@ fn lfo(t: &Tree) -> Lfo {
     }
 }
 
+/// A `ShaperBoxEnvelopeFollowerState` (core.md 5.4); missing members keep the init defaults.
+fn env(t: &Tree) -> EnvParams {
+    let d = EnvParams::default();
+    EnvParams {
+        active: b(t, "active", d.active),
+        mode: i(t, "mode", d.mode),
+        use_sidechain: b(t, "useSidechain", d.use_sidechain),
+        filter_setup_is_free: b(t, "filterSetupIsFree", d.filter_setup_is_free),
+        hp_cutoff: f(t, "hpCutoff", d.hp_cutoff),
+        lp_cutoff: f(t, "lpCutoff", d.lp_cutoff),
+        depth: i(t, "depth", d.depth),
+        threshold: f(t, "threshold", d.threshold),
+        amount: f(t, "amount", d.amount),
+        attack: f(t, "attack", d.attack),
+        hold: f(t, "hold", d.hold),
+        release: f(t, "release", d.release),
+        auto_release: b(t, "autoRelease", d.auto_release),
+        knee: f(t, "knee", d.knee),
+        offset: f(t, "offset", d.offset),
+        makeup: f(t, "makeup", d.makeup),
+        auto_makeup: b(t, "autoMakeup", d.auto_makeup),
+    }
+}
+
 fn band(t: &Tree) -> Band {
     let mut out = Band {
         mix: f(t, "mix", 1.0),
@@ -246,6 +280,7 @@ fn band(t: &Tree) -> Band {
             out.sections.push(Section {
                 id: id(c).unwrap_or_default().to_string(),
                 lfo: c.by_id("lfo").map(lfo).unwrap_or_default(),
+                env: c.by_id("envelopeFollower").map(env).unwrap_or_default(),
             });
         } else if let (Some(k), Some(v)) = (id(c), c.prop("value"))
             && k != "mix"
@@ -269,6 +304,7 @@ impl State {
                 let sh = &mut s.shapers[k];
                 sh.visible = b(c, "VISIBLE", false);
                 sh.on = b(c, "on", false);
+                sh.mode = i(c, "mode", 0);
                 if let Some(sp) = c.by_id("split") {
                     let d = Split::default();
                     sh.split = Split {
@@ -300,6 +336,9 @@ impl State {
                 }
                 "masterMix" => s.master_mix = f(t, "masterMix", 1.0),
                 "bypassed" => s.bypassed = b(t, "bypassed", false),
+                "useConstantBaseLatency" => {
+                    s.use_constant_base_latency = b(t, "useConstantBaseLatency", true);
+                }
                 _ => {}
             }
         }
@@ -426,6 +465,77 @@ mod tests {
         root.props
             .push(("version".into(), Var::String(version.into())));
         root
+    }
+
+    /// A Pitch state with `mode` 2, one band whose `pitch` section has a follower that stores
+    /// only some members, and `useConstantBaseLatency` off.
+    #[test]
+    fn envelope_follower_mode_and_base_latency() {
+        let ef = node(
+            "ShaperBoxEnvelopeFollowerState",
+            Some("envelopeFollower"),
+            vec![
+                leaf("bool", "active", Var::Bool(true)),
+                leaf("int", "mode", Var::Int(1)),
+                leaf("bool", "filterSetupIsFree", Var::Bool(true)),
+                leaf("float", "hpCutoff", Var::Double(0.25)),
+                leaf("int", "depth", Var::Int(2)),
+                leaf("float", "attack", Var::Double(0.5)),
+                leaf("bool", "autoMakeup", Var::Bool(true)),
+            ],
+        );
+        let pitch = node(
+            "SectionEnvState",
+            Some("pitch"),
+            vec![node("LfoState", Some("lfo"), vec![]), ef],
+        );
+        let formant = node(
+            "SectionEnvState",
+            Some("formant"),
+            vec![node("LfoState", Some("lfo"), vec![])],
+        );
+        let band = node(
+            "PitchBandState",
+            None,
+            vec![pitch, formant, leaf("int", "grainSizeWsola", Var::Int(2))],
+        );
+        let root = node(
+            "PluginState",
+            None,
+            vec![
+                node(
+                    "PitchState",
+                    Some("pitch"),
+                    vec![
+                        leaf("int", "mode", Var::Int(2)),
+                        node("enumeration", Some("bands"), vec![band]),
+                    ],
+                ),
+                leaf("bool", "useConstantBaseLatency", Var::Bool(false)),
+            ],
+        );
+        let s = State::from_tree(&root);
+        let sh = &s.shapers[15];
+        assert_eq!(sh.mode, 2);
+        assert!(!s.use_constant_base_latency);
+        assert_eq!(sh.bands[0].int("grainSizeWsola", 0), 2);
+        let want = EnvParams {
+            active: true,
+            mode: 1,
+            filter_setup_is_free: true,
+            hp_cutoff: 0.25,
+            depth: 2,
+            attack: 0.5,
+            auto_makeup: true,
+            ..EnvParams::default()
+        };
+        assert_eq!(sh.bands[0].section("pitch").unwrap().env, want);
+        assert_eq!(
+            sh.bands[0].section("formant").unwrap().env,
+            EnvParams::default()
+        );
+        assert!(State::default().use_constant_base_latency);
+        assert_eq!(s.shapers[10].mode, 0);
     }
 
     fn ys(s: &State, band: usize, section: &str) -> Vec<f32> {

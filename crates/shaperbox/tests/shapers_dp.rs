@@ -742,6 +742,18 @@ const PITCH_CASES: [PitchCase; 14] = [
     ),
 ];
 
+/// WSOLA (mode 0) cases: name, input, pitch wave (`None`: the ramp), grainSizeWsola. The
+/// generator renders twice the length of the other Pitch cases.
+const WSOLA_CASES: [(&str, &str, Option<f32>, i32); 7] = [
+    ("wsola noise ratio 2 grain 0", "noise", Some(0.75), 0),
+    ("wsola noise ratio .5 grain 2", "noise", Some(0.25), 2),
+    ("wsola sine ratio sqrt2 grain 1", "sine", Some(0.625), 1),
+    ("wsola drums ratio 2 (transients)", "drums", Some(0.75), 0),
+    ("wsola clicks ratio 1", "clicks", Some(0.5), 0),
+    ("wsola clicks ratio .5 grain 1", "clicks", Some(0.25), 1),
+    ("wsola sine ratio ramp", "sine", None, 0),
+];
+
 fn ramp(n: usize) -> Vec<f32> {
     let k = (1.0f64 / 9600.0) as f32;
     (0..n).map(|i| 0.25 + i as f32 * k).collect()
@@ -777,6 +789,7 @@ fn pitch_matches_the_model() {
             grain_size_cyclic: gc,
             link_formant: link,
             fill_gaps: fill,
+            ..PitchParams::default()
         };
         let r = ramp(case.n);
         let out = run_pitch(
@@ -803,26 +816,50 @@ fn pitch_matches_the_model() {
 }
 
 #[test]
+fn wsola_matches_the_model() {
+    let _ftz = FlushToZero::new();
+    let refs = load("pitch.bin");
+    let mut worst = 0.0f32;
+    for (name, sig, wp, gw) in WSOLA_CASES {
+        let case = &refs[name];
+        let x = signal(sig, case.n);
+        let p = PitchParams {
+            mode: 0,
+            grain_size_wsola: gw,
+            ..PitchParams::default()
+        };
+        let r = ramp(case.n);
+        let out = run_pitch(
+            &x,
+            &p,
+            wp.is_none().then_some(&r[..]),
+            wp.unwrap_or(0.0),
+            0.5,
+        );
+        let [l, rr] = channels(&out);
+        let e = max_err(case, &[&l, &rr]);
+        eprintln!("pitch {name:58} max err {e:.3e}");
+        worst = worst.max(e);
+    }
+    assert!(worst <= 1e-6, "worst {worst}");
+}
+
+#[test]
 fn pitch_latency_and_mix() {
     assert_eq!(latency(48000.0, 1), 2381);
     assert_eq!(latency(48000.0, 2), 2861);
     assert_eq!(latency(44100.0, 1), 2187);
     assert_eq!(latency(96000.0, 1), 4754);
-    assert_eq!(latency(48000.0, 0), latency(48000.0, 1));
+    assert_eq!(latency(48000.0, 0), 1687);
+    // The model formula; shapers_b.md 2.6 quotes 1635 (code-derived, inconsistent with it).
+    assert_eq!(latency(44100.0, 0), 1551);
     assert_eq!(latency(48000.0, 3), 0);
     assert_eq!(ratio_from_wave(0.5), 1.0);
     assert_eq!(ratio_from_wave(1.0), 4.0);
-
-    // Mode 0 runs PSOLA Vocals until WSOLA is ported.
-    let x = signal("noise", 3000);
     let p = |mode| PitchParams {
         mode,
         ..PitchParams::default()
     };
-    assert_eq!(
-        run_pitch(&x, &p(0), None, 0.75, 0.5),
-        run_pitch(&x, &p(1), None, 0.75, 0.5)
-    );
 
     // At ratio 1 the wet path is the input delayed by the latency, so mix 0.5 with the delayed
     // dry gives 2 x[n - lat].

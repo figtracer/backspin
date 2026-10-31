@@ -7,8 +7,8 @@
 //!   (`FUN_0042a5d8`) and, in Drums, the transient detector. The synthesis is bit-exact in the
 //!   model; the detector uses a double-precision FFT (`realfft`) where the plugin uses pffft, so
 //!   voiced material can differ by a few ulps of the detected period.
-//! - Mode 0, WSOLA (`FUN_0042eda4`): **not ported yet**. Mode 0 falls back to PSOLA Vocals
-//!   (its latency, 2381 samples at 48 kHz, instead of WSOLA's 1687).
+//! - Mode 0, WSOLA (`FUN_0042eda4`, shapers_b.md 2.6) with the transient detector of the
+//!   unsplit input. Bit-exact in the model.
 //!
 //! The band mix is the send-style law (`super::reverb::send_mix`) with the dry signal delayed by
 //! the shifter latency ([`PitchBand::delay_dry`]). The latency is not reported to the host.
@@ -1485,6 +1485,8 @@ struct TransientDetector {
     peakd: f32,
     peakcomb: f32,
     peakamp: f32,
+    /// The onset length (`+0x88`).
+    total: i64,
     cntbelow: i64,
     cnt90: i64,
     cnt94: i64,
@@ -1538,6 +1540,7 @@ impl TransientDetector {
             peakd: 0.0,
             peakcomb: 0.0,
             peakamp: 0.0,
+            total: 0,
             cntbelow: 0,
             cnt90: 0,
             cnt94: 0,
@@ -1633,6 +1636,7 @@ impl TransientDetector {
             self.cntbelow = 0;
             self.cnt90 = 0;
             self.peakamp = 0.0;
+            self.total = 0;
             self.cnt94 = 0;
             self.peak = f;
         }
@@ -1655,13 +1659,16 @@ impl TransientDetector {
         }
         self.cnt90 += 1;
         self.cnt94 = cnt94;
+        // The binary compares the length before the increment.
+        let total = self.total;
+        self.total += 1;
         self.cntbelow = if f <= peak { self.cntbelow + 1 } else { 0 };
         let mut fire = false;
         if f < peak * 0.5 || self.cntbelow > self.flat_max {
             self.active = false;
             self.floor = f;
             fire = true;
-        } else if cnt94 >= self.min_len && self.peakamp >= Self::AMP_THR {
+        } else if total >= self.min_len && self.peakamp >= Self::AMP_THR {
             fire = true;
         }
         if fire && peak >= Self::FLUX_THR && !self.fired {
@@ -1691,12 +1698,368 @@ impl TransientDetector {
     }
 }
 
+/// The WSOLA grain lengths in seconds (26 / 32 / 38 ms) by `grainSizeWsola`.
+const WSOLA_GRAIN_SEC: [f32; 3] = [
+    f32::from_bits(0x3cd4_fdf4),
+    f32::from_bits(0x3d03_126f),
+    f32::from_bits(0x3d1b_a5e3),
+];
+/// 1e-5: the ratio deviation under which WSOLA runs at ratio 1.
+const WSOLA_EPS: f32 = f32::from_bits(0x3727_c5ac);
+/// The transient countdown ring of WSOLA.
+const WSOLA_TRANS: usize = 128;
+/// The most grains WSOLA keeps (`FUN_00430100`).
+const WSOLA_GRAINS: usize = 8;
+
+/// The fixed sizes of WSOLA (`FUN_0042fde8`, double arithmetic then truncation).
+#[derive(Clone, Copy, Debug)]
+struct WsolaSizes {
+    fade: i64,
+    search: i64,
+    sync: i64,
+    read_delay: i64,
+    lat: i64,
+}
+
+impl WsolaSizes {
+    fn new(sr: f32) -> Self {
+        let srd = sr as f64;
+        let max_grain = (srd * 0.038) as i64;
+        let fade = (srd * 0.004) as i64;
+        let search = (srd * 0.02) as i64;
+        // The onset detector `minLen` (`FUN_0045ff80`).
+        let sync = (srd * 0.009_999_999_776_482_582).ceil() as i64;
+        let half = max_grain / 2;
+        let base = half.max(search * 2 - half);
+        let base = if sync != 0 { sync + base } else { half };
+        let read_delay = base + 7;
+        Self {
+            fade,
+            search,
+            sync,
+            read_delay,
+            lat: read_delay + fade,
+        }
+    }
+}
+
+/// One WSOLA grain: read position (delay), crossfade state and step, sync flag, age.
+#[derive(Clone, Copy, Debug)]
+struct WsolaGrain {
+    pos: f32,
+    fade: f32,
+    step: f32,
+    sync: bool,
+    age: f32,
+}
+
+/// Mode 0, `PitchShifterWsola` (`FUN_0042eda4`): grains read from a delay line at the pitch
+/// ratio, each new grain placed by a similarity search on a 200 Hz low-passed copy of the input and
+/// crossfaded over the previous ones; transients start a sync grain.
+struct Wsola {
+    sr: f32,
+    s: WsolaSizes,
+    ring: Ring,
+    ring_lp: Ring,
+    lp: [OnePole; 2],
+    lp_k: f32,
+    ratio_ring: Vec<f32>,
+    rmask: i64,
+    rw: i64,
+    trans: [i64; WSOLA_TRANS],
+    t_head: usize,
+    t_write: usize,
+    t_count: usize,
+    age: i64,
+    hold: i64,
+    grains: Vec<WsolaGrain>,
+    first: bool,
+    lp_buf: Vec<[f32; 2]>,
+}
+
+impl Wsola {
+    fn new(sr: f32, max_block: usize) -> Self {
+        let s = WsolaSizes::new(sr);
+        let size = next_pow2(s.lat as usize * 8);
+        Self {
+            sr,
+            s,
+            ring: Ring::new(size),
+            ring_lp: Ring::new(size),
+            lp: [OnePole::default(); 2],
+            lp_k: tpt_k(200.0, sr),
+            ratio_ring: vec![1.0; size],
+            rmask: size as i64 - 1,
+            rw: 0,
+            trans: [0; WSOLA_TRANS],
+            t_head: 0,
+            t_write: 0,
+            t_count: 0,
+            age: 0x7fff_ffff,
+            hold: 0,
+            grains: Vec::with_capacity(WSOLA_GRAINS + 1),
+            first: true,
+            lp_buf: vec![[0.0; 2]; max_block],
+        }
+    }
+
+    /// Appends a grain, keeping at most 8 (the oldest go first).
+    fn add_grain(&mut self, pos: f32, fade: f32, step: f32, sync: bool) {
+        if self.grains.len() >= WSOLA_GRAINS {
+            let drop = self.grains.len() + 1 - WSOLA_GRAINS;
+            self.grains.drain(..drop);
+        }
+        self.grains.push(WsolaGrain {
+            pos,
+            fade,
+            step,
+            sync,
+            age: 0.0,
+        });
+    }
+
+    fn reset_trans(&mut self) {
+        self.t_head = 0;
+        self.t_write = 0;
+    }
+
+    /// Drops the head of the transient countdown ring; true when the ring is now empty.
+    fn pop_trans(&mut self) -> bool {
+        self.t_head = (self.t_head + 1) & (WSOLA_TRANS - 1);
+        self.t_count -= 1;
+        if self.t_count == 0 {
+            self.reset_trans();
+            return true;
+        }
+        false
+    }
+
+    /// The similarity search: the offset in `[0, w10)` back from `start` whose `fade` samples of
+    /// the low-passed ring best match those at `tp` (least of the larger channel's squared sum).
+    fn search(&self, tp: i64, start: i64, w10: i64, remaining: i64) -> i64 {
+        let fade = self.s.fade;
+        let mut best = 0;
+        if w10 < 1 || fade <= 0 {
+            return best;
+        }
+        let rg = &self.ring_lp;
+        let mut mn = f32::MAX;
+        let a_off = -remaining - tp;
+        let b_off0 = -remaining - start;
+        for cand in 0..w10 {
+            let (mut sl, mut sr) = (0.0f32, 0.0f32);
+            for j in 0..fade {
+                // `ia` / `ib` count the samples back from the write head.
+                let (ia, ib) = (remaining + tp - j, start + remaining - cand - j);
+                let (a_i, b_i) = (a_off + j, b_off0 + cand + j);
+                let (al, ar) = if ia >= 1 && rg.filled >= ia {
+                    rg.at(a_i + rg.w)
+                } else {
+                    (0.0, 0.0)
+                };
+                let (bl, br) = if ib >= 1 && rg.filled >= ib {
+                    rg.at(b_i + rg.w)
+                } else {
+                    (0.0, 0.0)
+                };
+                let dl = al - bl;
+                sl += dl * dl;
+                let dr = ar - br;
+                sr += dr * dr;
+            }
+            let m = if sl < sr { sr } else { sl };
+            if m < mn {
+                best = cand;
+                mn = m;
+            }
+        }
+        best
+    }
+
+    /// Processes one block of `buf.len() <= max_block` samples; `trans` are the in-block indices
+    /// of the transients of the unsplit input.
+    #[allow(clippy::too_many_lines)]
+    fn process(
+        &mut self,
+        buf: &mut [[f32; 2]],
+        ratio: &[f32],
+        trans: &[i64],
+        grain_size: i32,
+        tab: &Tables,
+    ) {
+        let s = self.s;
+        for &t in trans {
+            if self.t_count == WSOLA_TRANS {
+                self.pop_trans();
+            }
+            self.trans[self.t_write] = s.sync - t;
+            self.t_write = (self.t_write + 1) & (WSOLA_TRANS - 1);
+            self.t_count += 1;
+        }
+        let n = buf.len();
+        if n == 0 {
+            return;
+        }
+        let gsec = WSOLA_GRAIN_SEC[grain_size.clamp(0, 2) as usize];
+        let (read_delay, fade, lat) = (s.read_delay, s.fade, s.lat);
+        self.ring.write(buf);
+        let lp_buf = &mut self.lp_buf[..n];
+        for (o, f) in lp_buf.iter_mut().zip(buf.iter()) {
+            for c in 0..2 {
+                o[c] = self.lp[c].lp(f[c], self.lp_k);
+            }
+        }
+        self.ring_lp.write(lp_buf);
+        if self.first {
+            self.first = false;
+            self.grains.clear();
+            self.add_grain(lat as f32, 1.0, 0.0, false);
+            self.ratio_ring.fill(ratio[0]);
+        }
+        for (i, &r) in ratio[..n].iter().enumerate() {
+            self.ratio_ring[((self.rw + i as i64) & self.rmask) as usize] = r;
+        }
+        self.rw = (self.rw + n as i64) & self.rmask;
+        let gl = (self.sr * gsec) as i64;
+        let grain = gl & !1;
+        let half = gl >> 1;
+        let latf = lat as f32;
+        let sync_n = (self.sr * C_001) as i64;
+        let sync_step = 1.0f32 / sync_n as f32;
+        let g75 = (grain as f32 * 0.75) as i64;
+        let fadef = fade as f32;
+        let searchf = s.search as f32;
+        let tmask = WSOLA_TRANS - 1;
+        for (i, out) in buf.iter_mut().enumerate() {
+            let remaining = (n - i) as i64;
+            let r0 = self.ratio_ring[((self.rw - (remaining + lat)) & self.rmask) as usize];
+            let dev = (r0 + -1.0).abs();
+            let r = if r0 > 4.0 { 4.0 } else { r0 };
+            let r = if r0 < 0.25 { 0.25 } else { r };
+            let r = if dev < WSOLA_EPS { 1.0 } else { r };
+            let direct = r == 1.0 && self.grains.len() == 1;
+            let exact = direct && (self.grains[0].pos - latf).abs() < 0.5;
+            let mut next_cd = 0;
+            if self.t_count != 0 {
+                let mut skip_inc = false;
+                loop {
+                    let e = self.trans[self.t_head];
+                    if e > read_delay {
+                        if self.pop_trans() {
+                            skip_inc = true;
+                            break;
+                        }
+                        continue;
+                    }
+                    if e == read_delay {
+                        if !exact {
+                            let pos = read_delay + (r * fadef) as i64;
+                            self.add_grain(pos as f32, 0.0, 1.0 / fadef, true);
+                            self.age = pos;
+                        }
+                        if self.pop_trans() {
+                            skip_inc = true;
+                        }
+                    }
+                    break;
+                }
+                if !skip_inc {
+                    for k in 0..self.t_count {
+                        self.trans[(self.t_head + k) & tmask] += 1;
+                    }
+                    if r != 1.0 {
+                        next_cd = self.trans[self.t_head];
+                    }
+                }
+            }
+            let rm1 = r + -1.0;
+            let step_n = r / fadef;
+            // Erase the grains before the newest fully faded-in one at index >= 1.
+            if let Some(k) = (1..self.grains.len())
+                .rev()
+                .find(|&k| self.grains[k].fade == 1.0)
+            {
+                self.grains.drain(..k);
+            }
+            let (mut outl, mut outr) = (0.0f32, 0.0f32);
+            if exact {
+                let rg = &self.ring;
+                let fl = rg.w - remaining - lat;
+                let limit = rg.size.min(rg.filled + 31);
+                let lo = rg.w - limit;
+                let rel = fl - lo;
+                if rel >= 0 {
+                    (outl, outr) = rg.at(rel.min(limit - remaining) + lo);
+                }
+            } else {
+                for gr in &mut self.grains {
+                    let (l, rr) = self.ring.read(gr.pos as f64, r, remaining, tab);
+                    let st = if gr.sync { gr.step } else { step_n };
+                    let f = gr.fade + st;
+                    let f = if f > 1.0 { 1.0 } else { f };
+                    let f = if f < 0.0 { 0.0 } else { f };
+                    gr.pos -= rm1;
+                    gr.fade = f;
+                    gr.age += r;
+                    let w = (f * f) * f.mul_add(-2.0, 3.0);
+                    outl = (l - outl).mul_add(w, outl);
+                    outr = (rr - outr).mul_add(w, outr);
+                }
+            }
+            self.age = self.age.min(0x7fff_fffe) + 1;
+            if !direct {
+                let lo = (fade + 7).max(next_cd + 2 * fade);
+                let hi = (self.age - fade - s.search / 2).min(read_delay + half + fade);
+                let hi = hi.max(lo + grain);
+                let lo = (hi - grain).max(lo);
+                let last = *self.grains.last().expect("WSOLA keeps a grain");
+                let go = if last.sync {
+                    last.age > searchf
+                } else {
+                    let p = last.pos as f64;
+                    p < lo as f64 || p > hi as f64
+                };
+                if go {
+                    // WsolaTransitionMode 0, the only reachable mode.
+                    let w10 = (grain - fade).min(g75);
+                    let mid = (hi + lo) / 2;
+                    let start = if !last.sync && (last.pos as f64) >= mid as f64 {
+                        w10 + lo
+                    } else {
+                        hi
+                    };
+                    let best = self.search(last.pos as i64, start, w10, remaining);
+                    self.add_grain((start - best) as f32, 0.0, 0.0, false);
+                }
+            }
+            self.hold = self.hold.max(1) - 1;
+            if direct && !exact && self.hold == 0 {
+                let base = self.rw - remaining - lat;
+                let found = (0..sync_n).find(|&k| {
+                    let rv = self.ratio_ring[((base + k) & self.rmask) as usize];
+                    (rv + -1.0).abs() > WSOLA_EPS
+                });
+                match found {
+                    Some(k) => self.hold = k,
+                    None => {
+                        self.add_grain(latf, 0.0, sync_step, true);
+                        self.age = lat;
+                    }
+                }
+            }
+            *out = [outl, outr];
+        }
+    }
+}
+
 /// The band values of the Pitch shaper.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PitchParams {
-    /// `mode` of the shaper (`PitchState`, shared by all bands): 0 WSOLA (falls back to PSOLA
-    /// Vocals), 1 PSOLA Vocals, 2 PSOLA Drums, 3 Cyclic. Default 0.
+    /// `mode` of the shaper (`PitchState`, shared by all bands): 0 WSOLA, 1 PSOLA Vocals,
+    /// 2 PSOLA Drums, 3 Cyclic. Default 0.
     pub mode: i32,
+    /// `grainSizeWsola` (band enum, default 0): the WSOLA grain length 26 / 32 / 38 ms.
+    pub grain_size_wsola: i32,
     /// `grainSizeCyclic` (band float, default 0.5): the Cyclic grain `sr (g^2 0.099 + 0.001)`.
     pub grain_size_cyclic: f32,
     /// `linkFormant` (band bool, default true): PSOLA ignores the formant section.
@@ -1709,6 +2072,7 @@ impl Default for PitchParams {
     fn default() -> Self {
         Self {
             mode: 0,
+            grain_size_wsola: 0,
             grain_size_cyclic: 0.5,
             link_formant: true,
             fill_gaps: 1.0,
@@ -1716,22 +2080,25 @@ impl Default for PitchParams {
     }
 }
 
-/// The shifter of a mode: `(vocals, sync)` for PSOLA, `None` for Cyclic.
+/// The PSOLA shifter of a mode: `(vocals, sync)` for modes 1 and 2, `None` for WSOLA and Cyclic.
 fn psola_mode(mode: i32, sr: f32) -> Option<(bool, i64)> {
     match mode {
-        3 => None,
+        1 => Some((true, 0)),
         2 => Some((false, (0.01 * sr as f64) as i64)),
-        // Mode 0 (WSOLA) is not ported; it runs PSOLA Vocals.
-        _ => Some((true, 0)),
+        _ => None,
     }
 }
 
-/// The dry-path latency of a mode in samples: the PSOLA latency `max(win + fade + sync + 7,
-/// sync + ceil(2 half))` with `win = ceil(512 sr / 11025)`, `fade = int(0.003 sr)`,
-/// `half = win / 2` and `sync = int(0.01 sr)` in Drums (0 in Vocals): 2381 / 2861 at 48 kHz;
-/// 0 for Cyclic.
+/// The dry-path latency of a mode in samples. WSOLA: `sync + max(maxGrain/2, 2 search -
+/// maxGrain/2) + 7 + fade` (1687 at 48 kHz, 1635 at 44.1 kHz). PSOLA: `max(win + fade + sync +
+/// 7, sync + ceil(2 half))` with `win = ceil(512 sr / 11025)`, `fade = int(0.003 sr)`,
+/// `half = win / 2` and `sync = int(0.01 sr)` in Drums (0 in Vocals): 2381 / 2861 at 48 kHz.
+/// Cyclic: 0.
 pub fn latency(sr: f32, mode: i32) -> usize {
-    psola_mode(mode, sr).map_or(0, |(_, sync)| PsolaSizes::new(sr, sync).lat as usize)
+    match mode.clamp(0, 3) {
+        0 => WsolaSizes::new(sr).lat as usize,
+        m => psola_mode(m, sr).map_or(0, |(_, sync)| PsolaSizes::new(sr, sync).lat as usize),
+    }
 }
 
 /// The samples `a..b` of a wave.
@@ -1750,6 +2117,7 @@ pub struct PitchBand {
     mode: i32,
     cyclic: Cyclic,
     psola: Box<Psola>,
+    wsola: Box<Wsola>,
     transients: TransientDetector,
     dc: [OnePole; 2],
     dc_k: f32,
@@ -1766,7 +2134,7 @@ impl PitchBand {
         let mut grain = Smoother::new(p.grain_size_cyclic, sr as f64, 0.0);
         grain.buf.reserve(max_block);
         let (vocals, sync) = psola_mode(p.mode, sr).unwrap_or((true, 0));
-        let max_lat = latency(sr, 2).max(latency(sr, 1));
+        let max_lat = (0..3).map(|m| latency(sr, m)).max().unwrap_or(0);
         Self {
             sr,
             tab: tables(),
@@ -1774,6 +2142,7 @@ impl PitchBand {
             mode: p.mode,
             cyclic: Cyclic::new(sr),
             psola: Box::new(Psola::new(sr, vocals, sync)),
+            wsola: Box::new(Wsola::new(sr, max_block)),
             transients: TransientDetector::new(sr),
             dc: [OnePole::default(); 2],
             dc_k: tpt_k(10.0, sr),
@@ -1841,6 +2210,13 @@ impl PitchBand {
             self.trans.clear();
         }
         match psola_mode(mode, self.sr) {
+            None if mode == 0 => self.wsola.process(
+                buf,
+                &self.ratio[..n],
+                &self.trans,
+                p.grain_size_wsola,
+                self.tab,
+            ),
             None => self
                 .cyclic
                 .process(buf, &self.ratio[..n], &self.grain, self.tab),

@@ -234,6 +234,18 @@ PITCH_CASES = [
 ]
 
 
+# name, input, pitch w ("ramp": the ramp below), grainSizeWsola (mode 0; mirrored in the Rust test)
+WSOLA_CASES = [
+    ("wsola noise ratio 2 grain 0", "noise", 0.75, 0),
+    ("wsola noise ratio .5 grain 2", "noise", 0.25, 2),
+    ("wsola sine ratio sqrt2 grain 1", "sine", 0.625, 1),
+    ("wsola drums ratio 2 (transients)", "drums", 0.75, 0),
+    ("wsola clicks ratio 1", "clicks", 0.5, 0),
+    ("wsola clicks ratio .5 grain 1", "clicks", 0.25, 1),
+    ("wsola sine ratio ramp", "sine", "ramp", 0),
+]
+
+
 def ramp(n):
     return [r32(r32(0.25) + r32(r32(float(i)) * r32(1.0 / 9600.0))) for i in range(n)]
 
@@ -250,6 +262,20 @@ def gen_pitch(n=4800):
         for b in range(0, n, 512):
             e = min(n, b + 512)
             o1, o2 = sh.block(xl[b:e], xr[b:e], ratio[b:e], formant[b:e], [r32(gc)] * (e - b))
+            ol += o1
+            orr += o2
+        cases.append((name, [ol, orr]))
+        print("  pitch", name, flush=True)
+    nw = 2 * n
+    for name, sig, wp, gw in WSOLA_CASES:
+        xl, xr = signal(sig, nw)
+        sh = P.PitchShaper(SR, 0, grain_wsola=gw)
+        wpv = ramp(nw) if wp == "ramp" else [r32(wp)] * nw
+        ratio = [P.ratio_from_wave(w) for w in wpv]
+        ol, orr = [], []
+        for b in range(0, nw, 512):
+            e = min(nw, b + 512)
+            o1, o2 = sh.block(xl[b:e], xr[b:e], ratio[b:e])
             ol += o1
             orr += o2
         cases.append((name, [ol, orr]))
