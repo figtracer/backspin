@@ -57,6 +57,9 @@ enum Drag {
 /// The editor's interaction state.
 #[derive(Default)]
 pub struct EnvState {
+    /// The other group's ghost line: the envelope and view it was computed for, and its
+    /// columns, kept until either changes (computing them every pass cost half the pass).
+    ghost: Option<(Envelope, Rect, Vec<Pos2>)>,
     hover: Hover,
     drag: Drag,
     /// The point the point menu belongs to, and where it opened.
@@ -171,13 +174,24 @@ fn value_text(v: f64) -> String {
 pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: Rect) {
     let group = gui.group();
     let index = gui.edited[group];
-    let (mut env, ghost) = {
+    let mut env = {
         let m = gui.shared.model.lock();
         let other = &m.banks[group ^ 1].slots[gui.edited[group ^ 1]];
-        (
-            m.banks[group].slots[index].env.clone(),
-            (!other.empty).then(|| other.env.clone()),
-        )
+        let ghost = &mut gui.env.ghost;
+        if other.empty {
+            *ghost = None;
+        } else if ghost
+            .as_ref()
+            .is_none_or(|(e, gr, _)| *e != other.env || *gr != r)
+        {
+            let gv = View {
+                r,
+                len: other.env.length,
+            };
+            let cols = columns(&other.env, &gv);
+            *ghost = Some((other.env.clone(), r, cols));
+        }
+        m.banks[group].slots[index].env.clone()
     };
     let v = View { r, len: env.length };
     let resp = ui.interact(r, Id::new("envelope"), Sense::click_and_drag());
@@ -223,7 +237,7 @@ pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: Rect) {
         gui.edit_slot(group, index, false, |s| s.env = env.clone());
     }
     menus::point_menu(gui, ui, setter, &v.r);
-    draw(gui, ui, &v, &env, ghost.as_ref(), group, index);
+    draw(gui, ui, &v, &env, group, index);
 }
 
 /// The mini preview of compact mode (72 x 72, editing frozen).
@@ -755,27 +769,19 @@ fn shortcuts(gui: &mut Gui, ui: &Ui, resp: &egui::Response, env: &mut Envelope) 
 /// Draws what the code-exact frame does not (it paints the background, grid, watermark, axis
 /// tags, curve and points): the freeze tint, the other group's ghost, hover feedback and, below,
 /// the playback locator.
-fn draw(
-    gui: &mut Gui,
-    ui: &Ui,
-    v: &View,
-    env: &Envelope,
-    ghost: Option<&Envelope>,
-    group: usize,
-    index: usize,
-) {
+fn draw(gui: &mut Gui, ui: &Ui, v: &View, env: &Envelope, group: usize, index: usize) {
     let p = ui.painter().with_clip_rect(v.r);
     if gui.freeze {
         p.rect_filled(v.r, 0.0, rgba(0x2fc8fb, 32));
     }
     // The other group's envelope as a ghost line.
-    if let Some(g) = ghost {
+    if let Some((_, _, cols)) = &gui.env.ghost {
         let c = if group == 0 {
             rgb(0x7d6e5c)
         } else {
             rgb(0x5c8556)
         };
-        p.add(Shape::line(columns(g, v), Stroke::new(1.0f32, c)));
+        p.add(Shape::line(cols.clone(), Stroke::new(1.0f32, c)));
     }
     let gc = group_color(group);
     if !gui.freeze {

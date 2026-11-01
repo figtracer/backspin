@@ -63,7 +63,7 @@ fn main() {
         selected: 5,
         band: 1,
         bands_active: [false, true, false],
-        table,
+        table: table.into(),
         points: vec![(0.25, 0.8), (0.75, -0.8)],
         ..Default::default()
     };

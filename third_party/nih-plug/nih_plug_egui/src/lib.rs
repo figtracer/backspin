@@ -58,6 +58,7 @@ where
         scaling_factor: AtomicCell::new(None),
         #[cfg(not(target_os = "macos"))]
         scaling_factor: AtomicCell::new(Some(1.0)),
+        egui_ctx: Default::default(),
     }))
 }
 

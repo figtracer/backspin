@@ -11,6 +11,7 @@ use crate::prims::{darken, disc};
 use crate::{Font, PANEL, Text};
 use backspin_gfx::dib::lighten;
 use backspin_gfx::{Dib, DrawPath, PI, Rect, gradient_lut};
+use std::sync::Arc;
 
 /// The section height under the form.
 pub const SB_HEIGHT: i32 = 205;
@@ -90,9 +91,10 @@ pub struct SbModel {
     /// The selected band 0..2 and which bands the split makes active.
     pub band: usize,
     pub bands_active: [bool; 3],
-    /// The selected band's first LFO: its table (one period) and its points (`x` in [0, 1),
-    /// `y` the control value); empty when the shaper has no LFO.
-    pub table: Vec<f32>,
+    /// The selected band's first LFO: its table (one period, shared with the editor's cache so
+    /// building the model does not copy it) and its points (`x` in [0, 1), `y` the control
+    /// value); empty when the shaper has no LFO.
+    pub table: Arc<Vec<f32>>,
     pub points: Vec<(f32, f32)>,
     /// The readout in the wave view's corner.
     pub readout: String,

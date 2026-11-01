@@ -10,7 +10,7 @@ use crossbeam::atomic::AtomicCell;
 use egui_baseview::egui::Context;
 use egui_baseview::EguiWindow;
 use nih_plug::prelude::{Editor, GuiContext, ParamSetter, ParentWindowHandle};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -29,6 +29,18 @@ pub(crate) struct EguiEditor<T> {
     /// The scaling factor reported by the host, if any. On macOS this will never be set and we
     /// should use the system scaling factor instead.
     pub(crate) scaling_factor: AtomicCell<Option<f32>>,
+
+    /// Backspin patch: the open window's egui context, so parameter changes from the host ask it
+    /// for a repaint (the window renders only when asked or when its contents change).
+    pub(crate) egui_ctx: Arc<Mutex<Option<Context>>>,
+}
+
+impl<T> EguiEditor<T> {
+    fn request_repaint(&self) {
+        if let Some(ctx) = &*self.egui_ctx.lock() {
+            ctx.request_repaint();
+        }
+    }
 }
 
 /// This version of `baseview` uses a different version of `raw_window_handle than NIH-plug, so we
@@ -70,6 +82,7 @@ where
         let update = self.update.clone();
         let state = self.user_state.clone();
         let egui_state = self.egui_state.clone();
+        let egui_ctx = self.egui_ctx.clone();
 
         let (unscaled_width, unscaled_height) = self.egui_state.size();
         let scaling_factor = self.scaling_factor.load();
@@ -105,7 +118,13 @@ where
             },
             Default::default(),
             state,
-            move |egui_ctx, _queue, state| build(egui_ctx, &mut state.write()),
+            {
+                let egui_ctx_slot = egui_ctx.clone();
+                move |egui_ctx, _queue, state| {
+                    *egui_ctx_slot.lock() = Some(egui_ctx.clone());
+                    build(egui_ctx, &mut state.write())
+                }
+            },
             move |egui_ctx, queue, state| {
                 let setter = ParamSetter::new(context.as_ref());
 
@@ -125,11 +144,10 @@ where
                     }
                 }
 
-                // For now, just always redraw. Most plugin GUIs have meters, and those almost always
-                // need a redraw. Later we can try to be a bit more sophisticated about this. Without
-                // this we would also have a blank GUI when it gets first opened because most DAWs open
-                // their GUI while the window is still unmapped.
-                egui_ctx.request_repaint();
+                // Backspin patch: no repaint request every frame. egui-baseview renders when the
+                // pass output changes and asks for a pass at a low rate while idle, so meters and
+                // a GUI opened while its window was still unmapped still show up; parameter
+                // changes from the host ask for a repaint below.
                 (update)(egui_ctx, &setter, &mut state.write());
             },
         );
@@ -137,6 +155,7 @@ where
         self.egui_state.open.store(true, Ordering::Release);
         Box::new(EguiEditorHandle {
             egui_state: self.egui_state.clone(),
+            egui_ctx,
             window,
         })
     }
@@ -165,21 +184,22 @@ where
     }
 
     fn param_value_changed(&self, _id: &str, _normalized_value: f32) {
-        // As mentioned above, for now we'll always force a redraw to allow meter widgets to work
-        // correctly. In the future we can use an `Arc<AtomicBool>` and only force a redraw when
-        // that boolean is set.
+        self.request_repaint();
     }
 
-    fn param_modulation_changed(&self, _id: &str, _modulation_offset: f32) {}
+    fn param_modulation_changed(&self, _id: &str, _modulation_offset: f32) {
+        self.request_repaint();
+    }
 
     fn param_values_changed(&self) {
-        // Same
+        self.request_repaint();
     }
 }
 
 /// The window handle used for [`EguiEditor`].
 struct EguiEditorHandle {
     egui_state: Arc<EguiState>,
+    egui_ctx: Arc<Mutex<Option<Context>>>,
     window: WindowHandle,
 }
 
@@ -190,6 +210,7 @@ unsafe impl Send for EguiEditorHandle {}
 impl Drop for EguiEditorHandle {
     fn drop(&mut self) {
         self.egui_state.open.store(false, Ordering::Release);
+        *self.egui_ctx.lock() = None;
         // XXX: This should automatically happen when the handle gets dropped, but apparently not
         self.window.close();
     }

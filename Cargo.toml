@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["third_party/nih-plug"]
+exclude = ["third_party/egui-baseview", "third_party/nih-plug"]
 members = ["crates/agg2d", "crates/clamp", "crates/envelope", "crates/dsp", "crates/engine", "crates/gfx", "crates/presets", "crates/qfc", "crates/render", "crates/shaperbox", "crates/ui", "plugin", "xtask"]
 
 [workspace.package]
@@ -44,3 +44,7 @@ nih_plug_derive = { path = "third_party/nih-plug/nih_plug_derive" }
 nih_plug_egui = { path = "third_party/nih-plug/nih_plug_egui" }
 nih_plug_xtask = { path = "third_party/nih-plug/nih_plug_xtask" }
 
+# egui-baseview with the macOS Cmd modifiers and the render-on-change frame loop
+# (third_party/egui-baseview/PATCHES.md).
+[patch."https://github.com/BillyDM/egui-baseview.git"]
+egui-baseview = { path = "third_party/egui-baseview" }
