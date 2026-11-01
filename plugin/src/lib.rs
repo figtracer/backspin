@@ -16,6 +16,8 @@ mod editor;
 mod params;
 mod sb;
 mod shared;
+#[cfg(test)]
+mod stress;
 
 use backspin_engine::{
     Engine, LATENCY, NUM_PARAMS, PM_HQ_NON_REALTIME, PM_IS_RENDERING, REC_UPDATE_VALUE,
@@ -90,6 +92,9 @@ pub struct Backspin {
     /// The shape processor is held out of the chain after the output guard tripped, until its
     /// replacement arrives.
     sb_hold: bool,
+    /// The stage whose output tripped the guard in the last block, for the stress tests.
+    #[cfg(test)]
+    trip_stage: Option<&'static str>,
 }
 
 impl Default for Backspin {
@@ -115,6 +120,8 @@ impl Default for Backspin {
             sb_events: Vec::new(),
             sidechain: Vec::new(),
             sb_hold: false,
+            #[cfg(test)]
+            trip_stage: None,
         }
     }
 }
@@ -240,6 +247,8 @@ impl Backspin {
             self.engine.set_song_ticks(self.ticks(pos, start));
             self.engine.render(&mut self.buf[start..n]);
         }
+        #[cfg(test)]
+        let engine_bad = runaway(&self.buf[..n]);
         // The ShaperBox section follows the Gross Beat engine. A new processor replaces one the
         // guard held out of the chain.
         if self.queues.sb.apply() {
@@ -268,12 +277,24 @@ impl Backspin {
                 &self.sb_events,
             );
         }
+        #[cfg(test)]
+        let shape_bad = runaway(&self.buf[..n]);
         self.process_clamp(n);
         if playing {
             self.own_pos += n as u64;
         }
         self.shared.status.publish(&self.engine);
         let tripped = runaway(&self.buf[..n]);
+        #[cfg(test)]
+        {
+            self.trip_stage = tripped.then_some(if engine_bad {
+                "engine"
+            } else if shape_bad {
+                "shape"
+            } else {
+                "clamp"
+            });
+        }
         if tripped {
             self.buf[..n].fill([0.0; 2]);
             self.engine.flush();
