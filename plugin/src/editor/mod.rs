@@ -1862,7 +1862,10 @@ mod snapshots {
     #[test]
     fn browser_drag_moves_a_preset() {
         let root = std::env::temp_dir().join(format!("backspin-browser-{}", std::process::id()));
-        let (lib, sub) = (root.join("Lib"), root.join("Lib/Sub"));
+        // One `join` per level: "Lib/Sub" would keep a `/` on Windows, where the browser's keys
+        // come from the folder listing with `\`.
+        let lib = root.join("Lib");
+        let sub = lib.join("Sub");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&sub).unwrap();
         std::fs::write(lib.join("A.fst"), b"a").unwrap();
