@@ -1,5 +1,4 @@
-//! The dialogs: tool dialogs with live preview, the rename and value prompts, message boxes and
-//! About.
+//! The dialogs: tool dialogs with live preview, the rename and value prompts and message boxes.
 //!
 //! A tool dialog previews on the slot itself, like the original: every change restores the
 //! envelope saved when the dialog opened and runs the tool again. Accept keeps the result,
@@ -13,10 +12,7 @@ use backspin_engine::envelope::tools::{
 };
 use backspin_engine::envelope::{Envelope, Point};
 use nih_plug::prelude::ParamSetter;
-use nih_plug_egui::egui::{
-    self, Color32, ColorImage, Context, Id, PointerButton, Rect, Sense, Slider, TextureHandle, Ui,
-    pos2, vec2,
-};
+use nih_plug_egui::egui::{self, Context, Id, PointerButton, Rect, Sense, Slider, Ui, pos2, vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolKind {
@@ -41,8 +37,6 @@ pub struct Dialogs {
     rename: Option<(usize, usize, String)>,
     value: Option<(usize, usize, usize, String)>,
     tool: Option<ToolDialog>,
-    pub about: bool,
-    about_image: Option<TextureHandle>,
     scale: ScaleSettings,
     decimate: i32,
     smooth: SmoothSettings,
@@ -61,8 +55,6 @@ impl Default for Dialogs {
             rename: None,
             value: None,
             tool: None,
-            about: false,
-            about_image: None,
             scale: ScaleSettings::default(),
             decimate: 500,
             smooth: SmoothSettings {
@@ -157,7 +149,6 @@ pub fn show(gui: &mut Gui, ctx: &Context, setter: &ParamSetter) {
     rename_prompt(gui, ctx);
     value_prompt(gui, ctx);
     tool_dialog(gui, ctx);
-    about(gui, ctx);
     let _ = setter;
 }
 
@@ -613,55 +604,4 @@ pub fn analyze_path(gui: &mut Gui, bank: usize, index: usize, path: &std::path::
             })
         }
     }
-}
-
-/// The About picture (`Artwork/About.png` in the plugin folder).
-fn about(gui: &mut Gui, ctx: &Context) {
-    if !gui.dialogs.about {
-        return;
-    }
-    if gui.dialogs.about_image.is_none()
-        && let Some(img) =
-            load_png(&backspin_presets::paths::gross_beat().join("Artwork/About.png"))
-    {
-        gui.dialogs.about_image = Some(ctx.load_texture("about", img, Default::default()));
-    }
-    let mut open = true;
-    egui::Window::new("About")
-        .collapsible(false)
-        .resizable(false)
-        .open(&mut open)
-        .show(ctx, |ui| match &gui.dialogs.about_image {
-            Some(t) => {
-                ui.image((t.id(), t.size_vec2()));
-            }
-            None => {
-                ui.label("Backspin");
-            }
-        });
-    if !open {
-        gui.dialogs.about = false;
-    }
-    let _: Color32 = PANEL;
-}
-
-fn load_png(path: &std::path::Path) -> Option<ColorImage> {
-    let file = std::fs::File::open(path).ok()?;
-    let mut dec = png::Decoder::new(file);
-    dec.set_transformations(
-        png::Transformations::normalize_to_color8() | png::Transformations::ALPHA,
-    );
-    let mut reader = dec.read_info().ok()?;
-    let mut buf = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buf).ok()?;
-    let (w, h) = (info.width as usize, info.height as usize);
-    let rgba: Vec<u8> = match info.color_type {
-        png::ColorType::Rgba => buf[..w * h * 4].to_vec(),
-        png::ColorType::GrayscaleAlpha => buf[..w * h * 2]
-            .chunks(2)
-            .flat_map(|c| [c[0], c[0], c[0], c[1]])
-            .collect(),
-        _ => return None,
-    };
-    Some(ColorImage::from_rgba_unmultiplied([w, h], &rgba))
 }

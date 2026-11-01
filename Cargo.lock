@@ -429,7 +429,6 @@ dependencies = [
  "nih_plug",
  "nih_plug_egui",
  "parking_lot",
- "png 0.17.16",
  "rfd",
  "rtrb 0.3.5",
  "serde",

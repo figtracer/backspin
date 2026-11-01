@@ -140,13 +140,6 @@ pub fn options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Respon
             if ui.checkbox(&mut view, "View scratching clock").changed() {
                 gui.shared.model.lock().view_scratch = view as u8;
             }
-            ui.separator();
-            ui.menu_button("About", |ui| {
-                if ui.button("About").clicked() {
-                    gui.dialogs.about = true;
-                    ui.close_menu();
-                }
-            });
         },
     );
 }
