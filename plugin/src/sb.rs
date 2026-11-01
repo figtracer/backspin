@@ -6,8 +6,10 @@ use backspin_shaperbox::state::State;
 use backspin_shaperbox::wave::Point;
 use backspin_shaperbox::{Tree, Var, read_preset, write_preset};
 use parking_lot::Mutex;
-use rtrb::{Consumer, Producer, RingBuffer};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use rtrb::{Consumer, Producer, PushError, RingBuffer};
+use std::ptr::null_mut;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 
 /// The section's model: on or off, and the state tree.
 #[derive(Clone, Default)]
@@ -51,37 +53,75 @@ impl Model {
     }
 }
 
-/// The shared side: the model, the sample rate the processors are built for, and the queues
-/// that carry new processors to the audio thread and old ones back.
+/// A processor on its way to the audio thread (`None` turns the section off), in a box that
+/// comes back through the garbage queue with the old processor inside.
+type Message = Box<Option<Box<Processor>>>;
+
+/// The message the audio thread has not taken yet. A push replaces a pending message, so rapid
+/// edits coalesce and the newest state always wins: nothing is lost to a full queue, and the
+/// audio thread takes at most one message per block and frees nothing.
+struct Mailbox(AtomicPtr<Option<Box<Processor>>>);
+
+impl Mailbox {
+    /// Leaves `p` for the audio thread and drops the pending message it did not take.
+    fn put(&self, p: Option<Box<Processor>>) {
+        let old = self.0.swap(Box::into_raw(Box::new(p)), Ordering::AcqRel);
+        if !old.is_null() {
+            // SAFETY: a non-null pointer came from `Box::into_raw` in `put`, and the swap took
+            // it out, so this is the only `Box::from_raw` of it.
+            drop(unsafe { Box::from_raw(old) });
+        }
+    }
+
+    /// Takes the pending message.
+    fn take(&self) -> Option<Message> {
+        let p = self.0.swap(null_mut(), Ordering::AcqRel);
+        // SAFETY: as in `put`.
+        (!p.is_null()).then(|| unsafe { Box::from_raw(p) })
+    }
+}
+
+impl Drop for Mailbox {
+    fn drop(&mut self) {
+        self.take();
+    }
+}
+
+/// The shared side: the model, the sample rate the processors are built for, the mailbox that
+/// carries new processors to the audio thread and the queue that brings old ones back.
 pub struct Shared {
     pub model: Mutex<Model>,
     pub sample_rate: AtomicU32,
-    /// Set when the latency the host knows is out of date.
+    /// Set when the latency the host knows may be out of date.
     pub latency_dirty: AtomicBool,
-    to_audio: Mutex<Producer<Option<Box<Processor>>>>,
-    garbage: Mutex<Consumer<Box<Processor>>>,
+    mailbox: Arc<Mailbox>,
+    garbage: Mutex<Consumer<Message>>,
 }
 
 /// The audio thread's ends.
 pub struct Audio {
-    from_ui: Consumer<Option<Box<Processor>>>,
-    garbage: Producer<Box<Processor>>,
+    mailbox: Arc<Mailbox>,
+    garbage: Producer<Message>,
     pub processor: Option<Box<Processor>>,
 }
 
+/// The garbage queue's length. It never holds more than two messages: the editor drains it
+/// before each push, and each push gives the audio thread at most one message.
+const GARBAGE: usize = 16;
+
 pub fn new() -> (Shared, Audio) {
-    let (tp, tc) = RingBuffer::new(16);
-    let (gp, gc) = RingBuffer::new(16);
+    let mailbox = Arc::new(Mailbox(AtomicPtr::new(null_mut())));
+    let (gp, gc) = RingBuffer::new(GARBAGE);
     (
         Shared {
             model: Mutex::new(Model::default()),
             sample_rate: AtomicU32::new(44100f32.to_bits()),
             latency_dirty: AtomicBool::new(false),
-            to_audio: Mutex::new(tp),
+            mailbox: mailbox.clone(),
             garbage: Mutex::new(gc),
         },
         Audio {
-            from_ui: tc,
+            mailbox,
             garbage: gp,
             processor: None,
         },
@@ -95,16 +135,24 @@ impl Shared {
 
     /// A processor for the model, or `None` when the section is off.
     pub fn build(&self) -> Option<Box<Processor>> {
-        let m = self.model.lock();
+        self.processor_for(&self.model.lock())
+    }
+
+    fn processor_for(&self, m: &Model) -> Option<Box<Processor>> {
         m.enabled
             .then(|| Box::new(Processor::new(m.state(), self.sample_rate())))
     }
 
-    /// Sends the model to the audio thread (from the editor).
+    /// Sends the model to the audio thread (from the editor, or from the background thread
+    /// when the output guard asks for a rebuild). Drops the processors the audio thread handed
+    /// back.
     pub fn push(&self) {
         while self.garbage.lock().pop().is_ok() {}
-        let p = self.build();
-        let _ = self.to_audio.lock().push(p);
+        // The model stays locked until the message is in the mailbox, so two pushers cannot
+        // leave a processor of an older model behind one of a newer model.
+        let m = self.model.lock();
+        self.mailbox.put(self.processor_for(&m));
+        drop(m);
         self.latency_dirty.store(true, Ordering::Relaxed);
     }
 
@@ -256,13 +304,18 @@ impl Shared {
 }
 
 impl Audio {
-    /// Takes the newest processor from the editor (at a block start).
-    pub fn apply(&mut self) {
-        while let Ok(p) = self.from_ui.pop() {
-            if let Some(old) = std::mem::replace(&mut self.processor, p) {
-                let _ = self.garbage.push(old);
-            }
+    /// Takes the newest processor from the editor (at a block start). Returns true when it took
+    /// one. The old processor leaves in the message's box, so nothing is freed here.
+    pub fn apply(&mut self) -> bool {
+        let Some(mut msg) = self.mailbox.take() else {
+            return false;
+        };
+        *msg = std::mem::replace(&mut self.processor, msg.take());
+        if let Err(PushError::Full(msg)) = self.garbage.push(msg) {
+            // Cannot happen (see `GARBAGE`); a leak is the fallback, never a free here.
+            std::mem::forget(msg);
         }
+        true
     }
 }
 
@@ -380,6 +433,48 @@ mod tests {
             );
         }
         eprintln!("{} shape presets embedded", p.shapes.len());
+    }
+
+    /// Pushes the audio thread does not take coalesce into the newest one, the audio thread
+    /// takes one message per block and sends the old processor back, and the garbage queue
+    /// never fills: nothing is lost and nothing is freed on the audio side.
+    #[test]
+    fn mailbox_keeps_the_newest_processor() {
+        let (shared, mut audio) = new();
+        // An empty state tree, so the mix setter has a tree to edit.
+        shared.model.lock().tree = Some(Tree {
+            kind: "ShaperBox".into(),
+            props: Vec::new(),
+            children: Vec::new(),
+        });
+        let mut rng = 11u32;
+        let mut next = |m: u32| {
+            rng = rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (rng >> 8) % m
+        };
+        for round in 0..200 {
+            // A burst of edits while the audio thread sleeps: on, off and mix changes.
+            let mut want = None;
+            for _ in 0..1 + next(40) {
+                let (on, mix) = (next(4) != 0, next(100) as f32 / 100.0);
+                shared.set_mix(mix, false);
+                shared.set_enabled(on);
+                want = Some((on, mix));
+            }
+            let (on, mix) = want.unwrap();
+            assert!(audio.apply(), "round {round}: nothing to take");
+            assert!(!audio.apply(), "round {round}: a second message");
+            assert_eq!(audio.processor.is_some(), on, "round {round}");
+            if let Some(p) = &audio.processor {
+                assert_eq!(p.state().master_mix, mix, "round {round}");
+            }
+            assert!(
+                audio.garbage.slots() >= GARBAGE - 1,
+                "round {round}: {} messages in the garbage",
+                GARBAGE - audio.garbage.slots()
+            );
+        }
+        assert!(!audio.apply());
     }
 
     /// The band mix and LFO length setters edit the state the processors are built from.
