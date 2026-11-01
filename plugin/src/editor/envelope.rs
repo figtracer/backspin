@@ -268,10 +268,13 @@ fn interact(
     let pointer = resp
         .interact_pointer_pos()
         .or_else(|| ui.ctx().pointer_hover_pos());
+    // Only the envelope's own layer: a window or menu on top of it (the preset browser, the
+    // options menu) takes its clicks, and they must not also edit the envelope.
+    let over = resp.contains_pointer();
 
     // Hover.
     if matches!(gui.env.drag, Drag::None)
-        && let Some(p) = pointer.filter(|p| v.r.contains(*p))
+        && let Some(p) = pointer.filter(|p| over && v.r.contains(*p))
     {
         gui.env.hover = Hover::None;
         let mut best = HIT;
@@ -305,9 +308,10 @@ fn interact(
     let Some(p) = pointer else { return false };
     let pos = v.pos(p.x).clamp(0.0, v.len);
     let val = v.val(p.y).clamp(0.0, 1.0);
-    let pressed = |b| ui.input(|i| i.pointer.button_pressed(b)) && v.r.contains(p);
-    let double =
-        ui.input(|i| i.pointer.button_double_clicked(PointerButton::Primary)) && v.r.contains(p);
+    let pressed = |b| over && ui.input(|i| i.pointer.button_pressed(b)) && v.r.contains(p);
+    let double = over
+        && ui.input(|i| i.pointer.button_double_clicked(PointerButton::Primary))
+        && v.r.contains(p);
 
     // Double-click: delete a point, reset a tension, or add a point.
     if double {
@@ -428,7 +432,8 @@ fn interact(
                 }
             }
         }
-    } else if ui.input(|i| i.pointer.button_pressed(PointerButton::Middle))
+    } else if over
+        && ui.input(|i| i.pointer.button_pressed(PointerButton::Middle))
         && let Hover::Point(i) = gui.env.hover
     {
         let on = env.points[i].selected();

@@ -1892,6 +1892,59 @@ mod snapshots {
         );
     }
 
+    /// Clicks on the open browser do not reach the envelope under it: a double-click over the
+    /// envelope area adds no point, and a right-click opens no point menu.
+    #[test]
+    fn browser_takes_the_envelope_clicks() {
+        let mut gui = gui_with(Some("Repeater"));
+        gui.shared.model.lock().view_bank = 0;
+        gui.edited = [9, 2];
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        s.run(&mut gui, &host, vec![vec![]]);
+        let points = |g: &Gui| g.shared.model.lock().banks[0].slots[9].env.points.len();
+        let before = points(&gui);
+        gui.browser.open(browser::Kind::GrossBeat);
+        s.run(&mut gui, &host, vec![vec![], vec![]]);
+        // Empty list space over the envelope (the factory folder has 9 rows).
+        let at = pos2(600.0, 420.0);
+        s.run(&mut gui, &host, double_click(at));
+        assert_eq!(
+            points(&gui),
+            before,
+            "the double-click added an envelope point"
+        );
+        let right = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: PointerButton::Secondary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        s.run(
+            &mut gui,
+            &host,
+            vec![
+                vec![egui::Event::PointerMoved(at)],
+                vec![right(true)],
+                vec![right(false)],
+                vec![],
+            ],
+        );
+        assert!(
+            gui.env.point_menu.is_none(),
+            "the right-click opened the point menu"
+        );
+        // With the browser closed the same double-click edits the envelope again.
+        gui.browser.open = None;
+        s.run(&mut gui, &host, vec![vec![]; 30]);
+        s.run(&mut gui, &host, double_click(at));
+        assert_ne!(
+            points(&gui),
+            before,
+            "the envelope no longer takes double-clicks"
+        );
+    }
+
     /// A preset dragged onto a folder of the tree moves on disk, and the list follows.
     #[test]
     fn browser_drag_moves_a_preset() {
