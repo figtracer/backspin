@@ -92,8 +92,10 @@ where
                     blue_bits: 8,
                     green_bits: 8,
                     alpha_bits: 8,
-                    depth_bits: 24,
-                    stencil_bits: 8,
+                    // Backspin patch: egui draws 2D triangles only, so no depth or stencil
+                    // buffer (each is a full-size Retina buffer).
+                    depth_bits: 0,
+                    stencil_bits: 0,
                     samples: None,
                     srgb: true,
                     double_buffer: true,
