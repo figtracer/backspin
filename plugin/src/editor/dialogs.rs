@@ -119,7 +119,7 @@ impl Dialogs {
     }
 
     /// A random number in `0..n` for the Create sequence randomizers (the original uses FPC
-    /// `Random`, which cannot be reproduced; SPEC.md decision 10).
+    /// `Random`, which cannot be reproduced).
     fn random(&mut self, n: u64) -> u64 {
         self.rng ^= self.rng << 13;
         self.rng ^= self.rng >> 7;

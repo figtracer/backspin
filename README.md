@@ -10,8 +10,7 @@
 
 Backspin is a Rust port of Image-Line Gross Beat, built on
 [nih-plug](https://github.com/robbert-vdh/nih-plug). The same input, state and parameters give
-the same output as the original, sample for sample (5,086 parity renders,
-[report](PORT_REPORT.md)). Under the Gross Beat form sits a shape section with per-band
+the same output as the original, sample for sample (5,086 parity renders). Under the Gross Beat form sits a shape section with per-band
 shapers and Clamp, a clipper at the end of the chain.
 
 ## Install

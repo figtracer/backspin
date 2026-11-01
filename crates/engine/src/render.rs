@@ -323,7 +323,7 @@ impl Engine {
     }
 }
 
-/// The code-only paths of decision 12 in SPEC.md, which the harness cannot drive: the
+/// The code-only paths, which the harness cannot drive: the
 /// stopped-transport fade, the scratch inertia and the tempo-change crossfade.
 #[cfg(test)]
 mod tests {

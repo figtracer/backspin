@@ -1,6 +1,6 @@
 //! Backspin: a port of Image-Line Gross Beat as a CLAP and VST3 plugin.
 //!
-//! The host mapping follows SPEC.md section 4: the host block is split at each MIDI note
+//! The host mapping: the host block is split at each MIDI note
 //! (decision 3), the song position is `pos_beats * 96` ticks (decision 4), offline rendering is
 //! `PM_HQ_NonRealtime` (decision 5), and the transport drives play, stop and song position changes
 //! (decision 6). The plugin reports 15 samples of latency.

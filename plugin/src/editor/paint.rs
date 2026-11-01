@@ -1,7 +1,7 @@
 //! Drawing helpers: colours, glyphs and the framework widgets (ui.md sections 2.5 and 6).
 //!
 //! The FL framework widgets (knob bevels, button styles) were not reverse engineered; they are
-//! drawn after the thumbnail (SPEC.md decision 14). Positions, sizes and colours come from ui.md.
+//! drawn after the thumbnail. Positions, sizes and colours come from ui.md.
 
 use nih_plug_egui::egui::{
     Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2,

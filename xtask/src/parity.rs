@@ -410,7 +410,7 @@ fn param(flags: &mut Vec<String>, i: usize, v: i64) {
     flags.extend([s("--param"), format!("{i}={v}")]);
 }
 
-/// Builds the full matrix of `PORT_PROMPT.md`.
+/// Builds the full parity matrix.
 fn matrix(out_dir: &Path) -> Result<Vec<Case>, String> {
     let mut cases = Vec::new();
     let mut rng = Rng(20261024);
