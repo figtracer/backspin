@@ -1858,6 +1858,40 @@ mod snapshots {
         );
     }
 
+    /// The envelope under the open browser does not show its hover hint through it.
+    #[test]
+    fn browser_hides_the_envelope_hint() {
+        let mut gui = gui_with(None);
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        let over_envelope = pos2(600.0, 300.0);
+        s.run(
+            &mut gui,
+            &host,
+            vec![vec![egui::Event::PointerMoved(over_envelope)], vec![]],
+        );
+        assert!(
+            gui.hint.starts_with("In:"),
+            "no envelope hint: {:?}",
+            gui.hint
+        );
+        gui.browser.open(browser::Kind::GrossBeat);
+        s.run(
+            &mut gui,
+            &host,
+            vec![
+                vec![egui::Event::PointerMoved(over_envelope)],
+                vec![],
+                vec![],
+            ],
+        );
+        assert!(
+            !gui.hint.starts_with("In:"),
+            "envelope hint under the browser: {:?}",
+            gui.hint
+        );
+    }
+
     /// A preset dragged onto a folder of the tree moves on disk, and the list follows.
     #[test]
     fn browser_drag_moves_a_preset() {

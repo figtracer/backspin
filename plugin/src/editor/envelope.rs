@@ -191,7 +191,13 @@ pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: Rect) {
     } else if resp.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
     }
-    if let Some(p) = ui.ctx().pointer_hover_pos().filter(|p| r.contains(*p)) {
+    // `contains_pointer` is false under a window on top (the preset browser), unlike the raw
+    // pointer position.
+    if let Some(p) = ui
+        .ctx()
+        .pointer_hover_pos()
+        .filter(|_| resp.contains_pointer())
+    {
         gui.hint = match gui.env.hover {
             Hover::Point(i) if !gui.freeze => format!(
                 "Point {}/{}: {} {}",
