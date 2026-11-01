@@ -12,7 +12,7 @@ pub mod sb;
 mod text;
 
 pub use env::EnvView;
-pub use painters::paint;
+pub use painters::{SLOT_BAR, SLOT_BAR_ALPHA, paint, slot_cell};
 pub use sb::{SB_HEIGHT, SbModel, ShaperCell, paint_sb};
 pub use text::QfcText;
 

@@ -262,9 +262,27 @@ fn side_selector(
     }
 }
 
-/// TimeSlotSelPaint (0x66bb0) for one group.
+/// The progress bar colours of the slot grids (time, volume), `0xRRGGBB`, and their alpha.
+pub const SLOT_BAR: [u32; 2] = [0x99e669, 0xffb870];
+pub const SLOT_BAR_ALPHA: i32 = 0x3c;
+
+/// Slot `i`'s cell of group `g` in form coordinates.
+pub fn slot_cell(g: usize, i: usize) -> Rect {
+    let r = grid_rects()[g];
+    let (cw, ch) = ((r.x1 - r.x0) / 4, (r.y1 - r.y0) / 9);
+    let (col, row) = ((i % 4) as i32, (i / 4) as i32);
+    Rect::new(
+        r.x0 + col * cw,
+        r.y0 + row * ch,
+        r.x0 + col * cw + cw - 1,
+        r.y0 + row * ch + ch - 1,
+    )
+}
+
+/// TimeSlotSelPaint (0x66bb0) for one group. A `bar_px` of 0 leaves the progress bar to the
+/// caller (the editor draws it live over the frame, so playback does not repaint the frame).
 fn slot_grid(dib: &mut Dib, w: i32, h: i32, m: &Model, g: usize, text: &mut dyn Text) {
-    const FILL: [u32; 2] = [0x99e669, 0xffb870];
+    const FILL: [u32; 2] = SLOT_BAR;
     let (cw, ch) = (w / 4, h / 9);
     let selected = m.selected[g];
     for i in 0..36usize {
@@ -284,7 +302,7 @@ fn slot_grid(dib: &mut Dib, w: i32, h: i32, m: &Model, g: usize, text: &mut dyn 
             dib.fill_rect(
                 Rect::new(r.x0, r.y0, r.x0 + m.bar_px[g], r.y1),
                 FILL[g],
-                0x3c,
+                SLOT_BAR_ALPHA,
             );
         }
         if (!playing || !is_sel) && (is_sel || m.edited[g] == i) {

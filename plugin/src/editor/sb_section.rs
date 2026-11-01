@@ -16,6 +16,8 @@ use nih_plug_egui::egui::{
     self, AboveOrBelow, Color32, Id, PointerButton, PopupCloseBehavior, Pos2, Rect, Response,
     ScrollArea, Sense, Ui, pos2,
 };
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 /// The rack names in state order.
@@ -83,17 +85,55 @@ fn preset_name(gui: &Gui, state: Option<&State>) -> String {
         .unwrap_or_else(|| "(none)".into())
 }
 
+/// What the section derives from the shape state, kept until the model's revision changes
+/// (parsing the tree and rendering a wave table every frame cost most of the idle editor time).
+#[derive(Default)]
+pub struct SbCache {
+    revision: u64,
+    state: Option<Arc<State>>,
+    /// The wave tables of the first LFOs shown so far, by shaper and band.
+    tables: HashMap<(usize, usize), Arc<Vec<f32>>>,
+}
+
+/// The parsed shape state (`None` without a preset), parsed once per revision.
+fn state(gui: &mut Gui) -> Option<Arc<State>> {
+    let m = gui.shared.sb.model.lock();
+    let c = &mut gui.sb_cache;
+    if c.revision != m.revision || c.state.is_some() != m.tree.is_some() {
+        *c = SbCache {
+            revision: m.revision,
+            state: m.tree.as_ref().map(|t| Arc::new(State::from_tree(t))),
+            tables: HashMap::new(),
+        };
+    }
+    c.state.clone()
+}
+
+/// The wave table of band `b`'s first LFO of shaper `k`, rendered once per revision.
+fn table(gui: &mut Gui, k: usize, b: usize) -> Option<Arc<Vec<f32>>> {
+    let s = state(gui)?;
+    let points = &s.shapers[k].bands[b].sections.first()?.lfo.points;
+    if points.is_empty() {
+        return None;
+    }
+    let t = gui
+        .sb_cache
+        .tables
+        .entry((k, b))
+        .or_insert_with(|| Arc::new(render_table(points)));
+    Some(t.clone())
+}
+
 /// The painters' model.
-pub fn model(gui: &Gui) -> SbModel {
-    let (enabled, state) = {
-        let m = gui.shared.sb.model.lock();
-        (m.enabled, m.tree.as_ref().map(State::from_tree))
-    };
+pub fn model(gui: &mut Gui) -> SbModel {
+    let enabled = gui.shared.sb.model.lock().enabled;
+    let state = state(gui);
+    let wave = table(gui, gui.sb_selected, gui.sb_band);
     let c = &gui.params.clamp;
     let item = |list: &[&str], v: i32| list[v.clamp(0, list.len() as i32 - 1) as usize].to_string();
     let mut out = SbModel {
         enabled,
-        preset: preset_name(gui, state.as_ref()),
+        preset: preset_name(gui, state.as_deref()),
         selected: gui.sb_selected,
         band: gui.sb_band,
         bands_active: [false, true, false],
@@ -128,8 +168,8 @@ pub fn model(gui: &Gui) -> SbModel {
     );
     if let Some(sec) = band.sections.first() {
         let lfo = &sec.lfo;
-        if !lfo.points.is_empty() {
-            out.table = render_table(&lfo.points);
+        if let Some(t) = &wave {
+            out.table = t.to_vec();
             out.points = lfo
                 .points
                 .iter()
@@ -294,12 +334,7 @@ fn presets(gui: &mut Gui, ui: &mut Ui) {
 fn mix_knob(gui: &mut Gui, ui: &mut Ui) {
     let r = at(layout::KNOB);
     let resp = ui.interact(r, Id::new("sb_mix"), Sense::click_and_drag());
-    let mix = {
-        let m = gui.shared.sb.model.lock();
-        m.tree
-            .as_ref()
-            .map_or(1.0, |t| State::from_tree(t).master_mix)
-    };
+    let mix = state(gui).map_or(1.0, |s| s.master_mix);
     if resp.drag_started_by(PointerButton::Primary) {
         gui.sb_mix_drag = Some((mix, 0.0));
     }
@@ -336,22 +371,20 @@ fn wave_view(gui: &mut Gui, ui: &mut Ui) {
         Sense::click_and_drag(),
     );
     let (k, b) = (gui.sb_selected, gui.sb_band);
-    let band = {
-        let m = gui.shared.sb.model.lock();
-        m.tree.as_ref().map(|t| {
-            let band = &State::from_tree(t).shapers[k].bands[b];
-            let points = band.sections.first().map(|s| s.lfo.points.clone());
-            (band.mix, points)
-        })
-    };
+    let band = state(gui).map(|s| {
+        let band = &s.shapers[k].bands[b];
+        let points = band.sections.first().map(|s| s.lfo.points.clone());
+        (band.mix, points)
+    });
     let Some((mix, points)) = band else { return };
+    let wave = table(gui, k, b);
     let r = resp.rect;
     // The painter's mapping: `y` runs from +1 at the top inset to -1 at the bottom inset.
     let (fw, fh) = (r.width() - 1.0, r.height() - 1.0 - 2.0 * WAVE_PAD);
     // The point whose marker (drawn on the curve, as the painter does) is under `pos`.
     let hit = |pos: Pos2| {
         let points = points.as_deref()?;
-        let table = render_table(points);
+        let table = wave.as_deref()?;
         let n = table.len().max(1);
         points
             .iter()
@@ -501,12 +534,8 @@ fn rack(gui: &mut Gui, ui: &mut Ui) {
         && let Some(p) = resp.interact_pointer_pos()
     {
         let i = band_at(p);
-        let active = {
-            let m = gui.shared.sb.model.lock();
-            m.tree
-                .as_ref()
-                .map(|t| bands_active(&State::from_tree(t), gui.sb_selected))
-        };
+        let k = gui.sb_selected;
+        let active = state(gui).map(|s| bands_active(&s, k));
         if active.is_some_and(|a| a[i]) {
             gui.sb_band = i;
         }
@@ -529,13 +558,7 @@ fn toggle_shaper(gui: &mut Gui, k: usize) {
         let lib = gui.sb_library.lock().clone().unwrap_or_default();
         load_init(gui, &lib);
     }
-    let on = {
-        let m = gui.shared.sb.model.lock();
-        m.tree.as_ref().is_some_and(|t| {
-            let s = &State::from_tree(t).shapers[k];
-            s.visible && s.on
-        })
-    };
+    let on = state(gui).is_some_and(|s| s.shapers[k].visible && s.shapers[k].on);
     gui.shared.sb.set_shaper(k, !on);
     if !on && !gui.shared.sb.model.lock().enabled {
         gui.shared.sb.set_enabled(true);

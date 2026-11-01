@@ -8,7 +8,8 @@ use super::paint::{Glyph, font, glyph};
 use super::{Gui, HOLD_ITEMS, SYNC_ITEMS};
 use backspin_gfx::{Dib, Rect as DRect};
 use backspin_ui::{
-    EnvView, Font, HEIGHT, Model, PANEL, QfcText, SB_HEIGHT, SbModel, Text, WIDTH, paint, paint_sb,
+    EnvView, Font, HEIGHT, Model, PANEL, QfcText, SB_HEIGHT, SLOT_BAR, SLOT_BAR_ALPHA, SbModel,
+    Text, WIDTH, paint, paint_sb, slot_cell,
 };
 use nih_plug_egui::egui::{
     self, Align2, Color32, ColorImage, Painter, Rect, TextureHandle, TextureOptions, pos2, vec2,
@@ -140,16 +141,14 @@ fn model(gui: &Gui) -> Model {
         clock: m.view_scratch != 0,
         ..Default::default()
     };
-    // The progress bar: four beats over the cell width (FUN_00066a30 keeps it in +0x1fc).
-    let cw = 248 / 4;
+    // The playing slots. Their progress bars are drawn live over the frame (`bars`), so playback
+    // does not repaint and upload the whole frame every frame.
     for b in 0..2 {
         out.playing[b] = if playing {
             status.active[b].load(Ordering::Relaxed)
         } else {
             -1
         };
-        let ppb = (cw - 1) as f64 / 4.0;
-        out.bar_px[b] = ((status.position(b) * ppb) as i32).clamp(0, cw - 1);
     }
     let slot = &m.banks[group].slots[gui.edited[group]];
     out.link = slot.link != 0;
@@ -328,5 +327,50 @@ pub fn show(gui: &mut Gui, ui: &egui::Ui, cache: &mut FrameCache) {
     );
     for it in &cache.overlay.0 {
         draw_item(p, it);
+    }
+    bars(gui, p);
+}
+
+/// Asks for a repaint about 30 times a second, for what moves while the host plays. The window
+/// runs a pass every frame but renders only on request, and a delayed request made in every pass
+/// would keep moving its deadline, so this asks at once on the first pass of each 1/30 s tick.
+pub fn repaint_while_playing(ctx: &egui::Context) {
+    let id = egui::Id::new("backspin_playing_tick");
+    let tick = (ctx.input(|i| i.time) * 30.0) as u64;
+    if ctx.data(|d| d.get_temp::<u64>(id)) != Some(tick) {
+        ctx.data_mut(|d| d.insert_temp(id, tick));
+        ctx.request_repaint();
+    }
+}
+
+/// The progress bars of the playing slots: four beats over the cell width (FUN_00066a30 keeps it
+/// in +0x1fc), the frame's fill over the cell.
+fn bars(gui: &Gui, p: &Painter) {
+    let status = &gui.shared.status;
+    if !status.playing.load(Ordering::Relaxed) {
+        return;
+    }
+    // The bars and the locator move while playing.
+    repaint_while_playing(p.ctx());
+    for (b, &c) in SLOT_BAR.iter().enumerate() {
+        let slot = status.active[b].load(Ordering::Relaxed);
+        if !(0..36).contains(&slot) {
+            continue;
+        }
+        let r = slot_cell(b, slot as usize);
+        let cw = r.x1 - r.x0 + 1;
+        let ppb = (cw - 1) as f64 / 4.0;
+        let px = ((status.position(b) * ppb) as i32).clamp(0, cw - 1);
+        if px > 0 {
+            let a = (SLOT_BAR_ALPHA * 255 / 256) as u8;
+            p.rect_filled(
+                Rect::from_min_max(
+                    pos2(r.x0 as f32, r.y0 as f32),
+                    pos2((r.x0 + px) as f32, r.y1 as f32),
+                ),
+                0.0,
+                Color32::from_rgba_unmultiplied((c >> 16) as u8, (c >> 8) as u8, c as u8, a),
+            );
+        }
     }
 }

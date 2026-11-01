@@ -106,6 +106,8 @@ pub struct Gui {
     pub sb_band_drag: Option<(f32, f32)>,
     /// The wave view's point drag: the point's index, its start `y` and the pointer travel.
     pub sb_point_drag: Option<(usize, f32, f32)>,
+    /// The parsed shape state and wave tables, kept until the shape model changes.
+    sb_cache: sb_section::SbCache,
     /// The code-exact frame of the open editor window.
     frame: frame::FrameCache,
     /// The file dialog that is open (behind a mutex: the editor state must be `Sync`).
@@ -154,6 +156,7 @@ impl Gui {
             sb_mix_drag: None,
             sb_band_drag: None,
             sb_point_drag: None,
+            sb_cache: Default::default(),
             frame: frame::FrameCache::default(),
             file_dialog: parking_lot::Mutex::new(None),
         }

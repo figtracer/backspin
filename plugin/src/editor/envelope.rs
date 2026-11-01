@@ -812,7 +812,7 @@ fn draw(
             [pos2(x, v.r.min.y), pos2(x, v.r.max.y)],
             Stroke::new(1.0f32, lc),
         );
-        ui.ctx().request_repaint();
+        super::frame::repaint_while_playing(ui.ctx());
     } else {
         trail.clear();
     }

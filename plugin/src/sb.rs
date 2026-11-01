@@ -7,13 +7,22 @@ use backspin_shaperbox::wave::Point;
 use backspin_shaperbox::{Tree, Var, read_preset, write_preset};
 use parking_lot::Mutex;
 use rtrb::{Consumer, Producer, RingBuffer};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// The section's model: on or off, and the state tree.
 #[derive(Clone, Default)]
 pub struct Model {
     pub enabled: bool,
     pub tree: Option<Tree>,
+    /// Changes whenever `enabled` or `tree` changes (unique in the process), so the editor can
+    /// keep what it derives from the tree until then.
+    pub revision: u64,
+}
+
+/// A revision number no model has had yet.
+pub fn next_revision() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 impl Model {
@@ -33,6 +42,7 @@ impl Model {
         Self {
             enabled: e != 0,
             tree: (!rest.is_empty()).then(|| read_preset(rest).ok()).flatten(),
+            revision: next_revision(),
         }
     }
 
@@ -108,6 +118,7 @@ impl Shared {
         let tree = read_preset(data)?;
         {
             let mut m = self.model.lock();
+            m.revision = next_revision();
             m.tree = Some(tree);
             m.enabled = true;
         }
@@ -116,7 +127,11 @@ impl Shared {
     }
 
     pub fn set_enabled(&self, on: bool) {
-        self.model.lock().enabled = on;
+        {
+            let mut m = self.model.lock();
+            m.enabled = on;
+            m.revision = next_revision();
+        }
         self.push();
     }
 
@@ -124,6 +139,7 @@ impl Shared {
     pub fn set_mix(&self, v: f32, push: bool) {
         {
             let mut m = self.model.lock();
+            m.revision = next_revision();
             let Some(t) = m.tree.as_mut() else { return };
             let is = |c: &Tree| matches!(c.prop("id"), Some(Var::String(x)) if x == "masterMix");
             match t.children.iter_mut().find(|c| is(c)) {
@@ -150,6 +166,7 @@ impl Shared {
     pub fn set_band_mix(&self, k: usize, b: usize, v: f32, push: bool) {
         {
             let mut m = self.model.lock();
+            m.revision = next_revision();
             let Some(band) = m.tree.as_mut().and_then(|t| band_tree(t, k, b)) else {
                 return;
             };
@@ -164,6 +181,7 @@ impl Shared {
     pub fn step_lfo_length(&self, k: usize, b: usize, step: i32) {
         {
             let mut m = self.model.lock();
+            m.revision = next_revision();
             let Some(band) = m.tree.as_mut().and_then(|t| band_tree(t, k, b)) else {
                 return;
             };
@@ -188,6 +206,7 @@ impl Shared {
     pub fn set_lfo_points(&self, k: usize, b: usize, points: &[Point], push: bool) {
         {
             let mut m = self.model.lock();
+            m.revision = next_revision();
             let Some(list) = m
                 .tree
                 .as_mut()
@@ -225,6 +244,7 @@ impl Shared {
     pub fn set_shaper(&self, k: usize, on: bool) {
         {
             let mut m = self.model.lock();
+            m.revision = next_revision();
             let Some(t) = m.tree.as_mut() else { return };
             set_shaper_leaf(t, k, "on", Var::Bool(on));
             if on {
@@ -388,6 +408,63 @@ mod tests {
             s.shapers[k].bands[1].sections[0].lfo.length,
             if length > 0 { length - 1 } else { 1 }
         );
+    }
+
+    /// Throughput of every library shape preset: `cargo test --release -p backspin
+    /// shape_throughput -- --ignored --nocapture` prints the average and the slowest presets as
+    /// a share of real time (4 s of noise at 48 kHz in 512-frame blocks, 120 BPM, playing).
+    #[test]
+    #[ignore = "benchmark; run on demand"]
+    fn shape_throughput() {
+        use backspin_shaperbox::graph::Transport;
+        let lib = library();
+        let Some(all) = lib.first() else { return };
+        // BACKSPIN_BENCH_PRESET runs one preset for a minute (for a profiler).
+        let only = std::env::var("BACKSPIN_BENCH_PRESET").ok();
+        let secs = if only.is_some() { 60.0 } else { 4.0f32 };
+        let (sr, block) = (48_000.0f32, 512usize);
+        let frames = (sr * secs) as usize;
+        let mut seed = 1u32;
+        let noise: Vec<[f32; 2]> = (0..frames)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let v = (seed >> 9) as f32 / (1u32 << 23) as f32 - 0.5;
+                [v, -v]
+            })
+            .collect();
+        let mut rows = Vec::new();
+        for p in &all.presets {
+            if only.as_ref().is_some_and(|n| *n != p.name) {
+                continue;
+            }
+            let Some(tree) = p.bytes().and_then(|b| read_preset(&b).ok()) else {
+                continue;
+            };
+            let mut proc = Processor::new(State::from_tree(&tree), sr);
+            let mut buf = noise.clone();
+            let t0 = std::time::Instant::now();
+            let mut pos = 0.0f64;
+            for chunk in buf.chunks_mut(block) {
+                let t = Transport {
+                    ppq: pos,
+                    bpm: 120.0,
+                    playing: true,
+                };
+                proc.process(chunk, t);
+                pos += chunk.len() as f64 / sr as f64 * 2.0;
+            }
+            rows.push((t0.elapsed().as_secs_f64() / secs as f64, p.name.clone()));
+        }
+        rows.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let avg = rows.iter().map(|r| r.0).sum::<f64>() / rows.len().max(1) as f64;
+        eprintln!(
+            "{} presets, average {:.2}% of real time",
+            rows.len(),
+            avg * 100.0
+        );
+        for (share, name) in rows.iter().take(12) {
+            eprintln!("{:6.2}%  {name}", share * 100.0);
+        }
     }
 
     /// The point setter edits the wave the processors are built from, and the audio follows.
