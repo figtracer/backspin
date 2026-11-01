@@ -45,6 +45,8 @@ pub(crate) struct Check {
 pub(crate) struct Chain {
     pub name: String,
     pub shape: Vec<u8>,
+    /// A signal on the sidechain bus (CLAP only); `None` leaves the bus unconnected.
+    pub sidechain: Option<Vec<[f32; 2]>>,
     pub clamp: backspin_clamp::Params,
 }
 
@@ -154,6 +156,7 @@ pub fn run(_args: &[String]) -> Result<(), String> {
             chain: Some(Chain {
                 name: name.clone(),
                 shape,
+                sidechain: None,
                 clamp,
             }),
         });
@@ -179,6 +182,45 @@ pub fn run(_args: &[String]) -> Result<(), String> {
             chain: Some(Chain {
                 name: "Ducking MIDI".into(),
                 shape,
+                sidechain: None,
+                clamp: backspin_clamp::Params {
+                    bypass: true,
+                    ..Default::default()
+                },
+            }),
+        });
+    }
+    // A sidechain bus drives the shape section's ducking (CLAP: the host connects the bus).
+    if let Some(shape) = shape_preset("Simple Pumping SC") {
+        let frames = 4 * 48000;
+        // A kick every half beat at 120 BPM: a 60 Hz body with a noise click, decaying (the
+        // preset's detector high-passes its input, so a pure low tone would not trigger it).
+        let sidechain = (0..frames)
+            .map(|i| {
+                let t = (i % 12000) as f32 / 48000.0;
+                let mut x = (i as u64)
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                x ^= x >> 29;
+                let noise = (x >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 1.0;
+                let v = ((t * 60.0 * std::f32::consts::TAU).sin() * 0.8 + noise * 0.6)
+                    * (-t * 25.0).exp();
+                [v, v]
+            })
+            .collect();
+        checks.push(Check {
+            preset: "Repeater",
+            time: 0,
+            volume: 0,
+            input: "noise",
+            sr: 48000,
+            tempo: 120.0,
+            block: 512,
+            notes: vec![],
+            chain: Some(Chain {
+                name: "Simple Pumping SC (sidechain)".into(),
+                shape,
+                sidechain: Some(sidechain),
                 clamp: backspin_clamp::Params {
                     bypass: true,
                     ..Default::default()
@@ -192,7 +234,8 @@ pub fn run(_args: &[String]) -> Result<(), String> {
     let mut total = 0;
     for (format, host) in hosts {
         for c in &checks {
-            if format == "vst3" && !c.notes.is_empty() {
+            let sidechain = c.chain.as_ref().is_some_and(|ch| ch.sidechain.is_some());
+            if format == "vst3" && (!c.notes.is_empty() || sidechain) {
                 continue;
             }
             total += 1;
@@ -371,6 +414,25 @@ unsafe fn check(lib: &dyn Host, dir: &Path, c: &Check) -> Result<Option<(f32, us
     let engine_only = want.clone();
     if let Some(chain) = &c.chain {
         apply_chain(&mut want, c, chain, lib.beat_factor())?;
+        // A sidechain must matter: the same chain without it sounds different.
+        if chain.sidechain.is_some() {
+            let mut without = engine_only.clone();
+            let bare = Chain {
+                sidechain: None,
+                ..chain.clone()
+            };
+            apply_chain(&mut without, c, &bare, lib.beat_factor())?;
+            let d = without
+                .iter()
+                .zip(&want)
+                .map(|(a, b)| (a[0] - b[0]).abs())
+                .fold(0f32, f32::max);
+            if d < 1e-2 {
+                return Err(format!(
+                    "the sidechain does not change the output (max {d:.2e})"
+                ));
+            }
+        }
     }
 
     // The plugin: the preset goes in as nih-plug state, with the host parameters set to the preset
@@ -469,7 +531,7 @@ fn apply_chain(
                 bpm: c.tempo,
                 playing: true,
             },
-            None,
+            chain.sidechain.as_ref().map(|sc| &sc[pos..pos + n]),
             &events,
         );
         if !chain.clamp.bypass {
@@ -668,6 +730,8 @@ impl Host for Library {
             }
             let mut out = vec![[0f32; 2]; input.len()];
             let (mut inl, mut inr) = (vec![0f32; c.block], vec![0f32; c.block]);
+            let (mut scl, mut scr) = (vec![0f32; c.block], vec![0f32; c.block]);
+            let sidechain = c.chain.as_ref().and_then(|ch| ch.sidechain.as_ref());
             let (mut outl, mut outr) = (vec![0f32; c.block], vec![0f32; c.block]);
             let mut pos = 0;
             while pos < input.len() {
@@ -676,15 +740,24 @@ impl Host for Library {
                     inl[i] = input[pos + i][0];
                     inr[i] = input[pos + i][1];
                 }
+                if let Some(sc) = sidechain {
+                    for i in 0..n {
+                        scl[i] = sc[pos + i][0];
+                        scr[i] = sc[pos + i][1];
+                    }
+                }
                 let mut in_ptrs = [inl.as_mut_ptr(), inr.as_mut_ptr()];
+                let mut sc_ptrs = [scl.as_mut_ptr(), scr.as_mut_ptr()];
                 let mut out_ptrs = [outl.as_mut_ptr(), outr.as_mut_ptr()];
-                let ain = clap_audio_buffer {
-                    data32: in_ptrs.as_mut_ptr(),
+                let bus = |ptrs: &mut [*mut f32; 2]| clap_audio_buffer {
+                    data32: ptrs.as_mut_ptr(),
                     data64: std::ptr::null_mut(),
                     channel_count: 2,
                     latency: 0,
                     constant_mask: 0,
                 };
+                // The main input, then the sidechain bus when the check connects one.
+                let ain = [bus(&mut in_ptrs), bus(&mut sc_ptrs)];
                 let mut aout = clap_audio_buffer {
                     data32: out_ptrs.as_mut_ptr(),
                     data64: std::ptr::null_mut(),
@@ -754,9 +827,9 @@ impl Host for Library {
                     steady_time: pos as i64,
                     frames_count: n as u32,
                     transport: &transport,
-                    audio_inputs: &ain,
+                    audio_inputs: ain.as_ptr(),
                     audio_outputs: &mut aout,
-                    audio_inputs_count: 1,
+                    audio_inputs_count: if sidechain.is_some() { 2 } else { 1 },
                     audio_outputs_count: 1,
                     in_events: &in_events,
                     out_events: &out_events,

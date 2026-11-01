@@ -45,9 +45,10 @@ pub struct Backspin {
     /// The Clamp clipper (built in `initialize`) and its planar work buffers.
     clamp: Option<backspin_clamp::Clamp>,
     clamp_buf: [Vec<f32>; 2],
-    /// The shape section's note-ons of the block (for LFO retriggering), preallocated in
-    /// `initialize`.
+    /// The shape section's note-ons of the block (for LFO retriggering) and the sidechain,
+    /// interleaved; both preallocated in `initialize`.
     sb_events: Vec<backspin_shaperbox::graph::NoteEvent>,
+    sidechain: Vec<[f32; 2]>,
 }
 
 impl Default for Backspin {
@@ -69,6 +70,7 @@ impl Default for Backspin {
             clamp: None,
             clamp_buf: [Vec::new(), Vec::new()],
             sb_events: Vec::new(),
+            sidechain: Vec::new(),
         }
     }
 }
@@ -159,8 +161,13 @@ impl Plugin for Backspin {
         AudioIOLayout {
             main_input_channels: NonZeroU32::new(2),
             main_output_channels: NonZeroU32::new(2),
-            // No sidechain port yet: nih-plug's wrappers read past the host's input buses when a
-            // host connects fewer than the plugin declares (`aux_input_idx > audio_inputs_count`).
+            // The shape section's sidechain (Dynamics, envelope followers, audio triggers). A host
+            // that leaves it unconnected gives silence (needs the vendored nih-plug's bus fix).
+            aux_input_ports: &[new_nonzero_u32(2)],
+            names: PortNames {
+                aux_inputs: &["Sidechain"],
+                ..PortNames::const_default()
+            },
             ..AudioIOLayout::const_default()
         },
         AudioIOLayout {
@@ -223,6 +230,7 @@ impl Plugin for Backspin {
         self.clamp = Some(backspin_clamp::Clamp::new(buffer_config.sample_rate, block));
         self.clamp_buf = [vec![0.0; block], vec![0.0; block]];
         self.sb_events = Vec::with_capacity(1024);
+        self.sidechain = vec![[0.0; 2]; block];
         self.playing = false;
         self.next_pos = None;
         self.own_pos = 0;
@@ -237,7 +245,7 @@ impl Plugin for Backspin {
     fn process(
         &mut self,
         buffer: &mut Buffer,
-        _aux: &mut AuxiliaryBuffers,
+        aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let n = buffer.samples();
@@ -341,6 +349,14 @@ impl Plugin for Backspin {
         }
         let beats = self.ticks(pos, 0) / PPQ as f64;
         if let Some(sbp) = self.queues.sb.processor.as_mut() {
+            let sidechain = aux.inputs.first_mut().and_then(|sc| {
+                let ch = sc.as_slice();
+                let (l, r) = (ch.first()?, ch.get(1).or(ch.first())?);
+                for (i, f) in self.sidechain[..n].iter_mut().enumerate() {
+                    *f = [l[i], r[i]];
+                }
+                Some(&self.sidechain[..n])
+            });
             sbp.process_with_events(
                 &mut self.buf[..n],
                 backspin_shaperbox::graph::Transport {
@@ -348,7 +364,7 @@ impl Plugin for Backspin {
                     bpm: tempo,
                     playing,
                 },
-                None,
+                sidechain,
                 &self.sb_events,
             );
         }
