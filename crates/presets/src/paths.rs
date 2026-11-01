@@ -119,3 +119,15 @@ pub fn system_font(name: &str) -> Option<PathBuf> {
         .map(|d| d.join(name))
         .find(|p| p.is_file())
 }
+
+/// Backspin's own settings folder: `~/Library/Application Support/Backspin` on macOS,
+/// `%APPDATA%\Backspin` on Windows, or `BACKSPIN_CONFIG_DIR` when set (tests).
+pub fn config() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("BACKSPIN_CONFIG_DIR") {
+        Some(PathBuf::from(d))
+    } else if cfg!(windows) {
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Backspin"))
+    } else {
+        home().map(|h| h.join("Library/Application Support/Backspin"))
+    }
+}

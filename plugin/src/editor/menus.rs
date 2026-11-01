@@ -1,6 +1,7 @@
 //! The menus (ui.md section 3).
 
 use super::dialogs::{self, ToolKind};
+use super::file_dialog;
 use super::paint::*;
 use super::{Gui, refusal};
 use crate::shared::Command;
@@ -53,36 +54,42 @@ pub fn options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Respon
         egui::PopupCloseBehavior::CloseOnClickOutside,
         |ui| {
             ui.set_min_width(230.0);
-            // Backspin addition: the host's preset list of the original, flat (a submenu in
-            // this popup would close the popup before its click lands).
-            title(ui, "Presets");
-            for p in state_presets() {
-                if ui
-                    .selectable_label(p.name == gui.gb_preset, &p.name)
-                    .clicked()
-                {
-                    load_preset(gui, setter, &p);
-                    gui.gb_preset = p.name.clone();
-                    ui.close_menu();
-                }
+            // Backspin addition: the host's preset list of the original, one titled list per
+            // source (a submenu in this popup would close the popup before its click lands).
+            let groups = backspin_presets::gross_beat_groups(crate::sb::embedded());
+            egui::ScrollArea::vertical()
+                .max_height(420.0)
+                .show(ui, |ui| {
+                    for g in &groups {
+                        title(ui, &format!("Presets: {}", g.name));
+                        for p in &g.presets {
+                            if ui
+                                .selectable_label(p.name == gui.gb_preset, &p.name)
+                                .clicked()
+                            {
+                                load_preset(gui, setter, p);
+                                gui.gb_preset = p.name.clone();
+                                ui.close_menu();
+                            }
+                        }
+                    }
+                });
+            if ui.button("Import preset folder...").clicked() {
+                file_dialog::open(gui, file_dialog::Action::ImportFolder);
+                ui.close_menu();
+            }
+            if !backspin_presets::imported_folders().is_empty()
+                && ui.button("Forget imported folders").clicked()
+            {
+                let _ = backspin_presets::forget_folders();
+                ui.close_menu();
             }
             if ui.button("Open preset file...").clicked() {
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Gross Beat preset", &["fst"])
-                    .pick_file()
-                    && let Ok(data) = std::fs::read(&p)
-                {
-                    load_preset_bytes(gui, setter, &data);
-                }
+                file_dialog::open(gui, file_dialog::Action::GrossBeatPreset);
                 ui.close_menu();
             }
             if ui.button("Open shape preset file...").clicked() {
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Shape preset", &["dat"])
-                    .pick_file()
-                {
-                    let _ = gui.shared.sb.load_file(&p);
-                }
+                file_dialog::open(gui, file_dialog::Action::ShapePreset);
                 ui.close_menu();
             }
             ui.separator();
@@ -178,12 +185,6 @@ pub fn wheel_menu(gui: &mut Gui, _ui: &mut Ui, setter: &ParamSetter, r: &Respons
     });
 }
 
-/// The Gross Beat state presets: the factory ones (the FL install's or the embedded ones), then
-/// the user's own.
-pub fn state_presets() -> Vec<Preset> {
-    backspin_presets::gross_beat_presets(crate::sb::embedded())
-}
-
 /// Loads a state preset: the model takes the new state, every slot and the options go to the
 /// audio engine, and the parameters go through the host.
 pub fn load_preset(gui: &mut Gui, setter: &ParamSetter, preset: &Preset) {
@@ -239,7 +240,7 @@ pub fn maps() -> Vec<Preset> {
 }
 
 /// Loads a `.fnv` file into the edited envelope with the kind check bypassed (0x239070).
-fn load_fnv(gui: &mut Gui, data: Option<std::borrow::Cow<'_, [u8]>>) {
+pub(super) fn load_fnv_bytes(gui: &mut Gui, data: Option<std::borrow::Cow<'_, [u8]>>) {
     if let Some(data) = data {
         let (g, i) = (gui.group(), gui.edited[gui.group()]);
         gui.edit_slot(g, i, false, |s| s.env.load_any(&data));
@@ -276,28 +277,18 @@ pub fn env_options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Re
                         ui.menu_button("Presets", |ui| {
                             for p in &list {
                                 if ui.button(&p.name).clicked() {
-                                    load_fnv(gui, p.bytes());
+                                    load_fnv_bytes(gui, p.bytes());
                                     ui.close_menu();
                                 }
                             }
                         });
                     });
                     if item(ui, true, "Open state file...", "") {
-                        if let Some(p) = rfd::FileDialog::new()
-                            .add_filter("Envelope state file", &["fnv"])
-                            .pick_file()
-                        {
-                            load_fnv(gui, std::fs::read(&p).ok().map(Into::into));
-                        }
+                        file_dialog::open(gui, file_dialog::Action::LoadEnvelope);
                         close = true;
                     }
                     if item(ui, true, "Save state file...", "") {
-                        if let Some(p) = rfd::FileDialog::new()
-                            .add_filter("Envelope state file", &["fnv"])
-                            .save_file()
-                        {
-                            let _ = backspin_engine::envelope::write_fnv(&p, &env);
-                        }
+                        file_dialog::open(gui, file_dialog::Action::SaveEnvelope(env.clone()));
                         close = true;
                     }
                     ui.separator();

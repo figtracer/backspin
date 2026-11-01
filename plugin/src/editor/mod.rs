@@ -5,6 +5,7 @@
 
 mod dialogs;
 mod envelope;
+mod file_dialog;
 mod frame;
 mod menus;
 mod paint;
@@ -105,6 +106,8 @@ pub struct Gui {
     pub sb_band_drag: Option<(f32, f32)>,
     /// The code-exact frame of the open editor window.
     frame: frame::FrameCache,
+    /// The file dialog that is open (behind a mutex: the editor state must be `Sync`).
+    file_dialog: parking_lot::Mutex<Option<file_dialog::Pending>>,
 }
 
 impl Gui {
@@ -149,6 +152,7 @@ impl Gui {
             sb_mix_drag: None,
             sb_band_drag: None,
             frame: frame::FrameCache::default(),
+            file_dialog: parking_lot::Mutex::new(None),
         }
     }
 
@@ -260,6 +264,7 @@ impl Gui {
     }
 
     fn frame(&mut self, ctx: &Context, setter: &ParamSetter) {
+        file_dialog::poll(self, setter);
         self.follow_status(setter);
         self.hint.clear();
         egui::CentralPanel::default()
@@ -1406,5 +1411,29 @@ mod snapshots {
         );
         let (values, wrapped) = host.sets(gui.params.clamp.on.as_ptr());
         assert!(wrapped && values == [1.0], "{values:?}");
+    }
+
+    /// A preset file the dialog returns loads into the model and names the current preset.
+    #[test]
+    fn picked_preset_file_loads() {
+        let Some(dir) = backspin_presets::paths::factory_presets() else {
+            return;
+        };
+        let mut gui = gui_with(None);
+        let host = NoHost;
+        let setter = ParamSetter::new(&host);
+        super::file_dialog::run(
+            &mut gui,
+            &setter,
+            super::file_dialog::Action::GrossBeatPreset,
+            &dir.join("Stutter.fst"),
+        );
+        assert_eq!(gui.gb_preset, "Stutter");
+        let named = gui.shared.model.lock().banks[0]
+            .slots
+            .iter()
+            .filter(|s| !s.name.is_empty())
+            .count();
+        assert!(named > 0, "the preset's slots did not load");
     }
 }

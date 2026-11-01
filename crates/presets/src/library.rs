@@ -85,16 +85,105 @@ fn embedded_files(files: &[(&'static str, &'static [u8])]) -> Vec<Preset> {
         .collect()
 }
 
-/// The Gross Beat state presets: the factory presets (the FL install's, else the pack's), then
-/// the user's own.
-pub fn gross_beat_presets(pack: Option<&Embedded>) -> Vec<Preset> {
-    let mut out = paths::factory_presets()
+/// The Gross Beat state presets in groups: the factory presets (the FL install's, else the
+/// pack's), the user's own, then each imported folder (its `.fst` files, subfolders included).
+pub fn gross_beat_groups(pack: Option<&Embedded>) -> Vec<Group> {
+    let factory = paths::factory_presets()
         .map(|d| files(&d, "fst"))
         .filter(|v| !v.is_empty())
         .or_else(|| pack.map(|p| embedded_files(&p.gross_beat)))
         .unwrap_or_default();
+    let mut out = vec![Group {
+        name: "Factory".into(),
+        presets: factory,
+    }];
     if let Some(d) = paths::user_presets() {
-        out.extend(files(&d, "fst"));
+        out.push(Group {
+            name: "User".into(),
+            presets: files(&d, "fst"),
+        });
+    }
+    for d in imported_folders() {
+        let name = d.file_name().map_or_else(
+            || d.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        out.push(Group {
+            name,
+            presets: files_deep(&d, "fst", 3),
+        });
+    }
+    out.retain(|g| !g.presets.is_empty());
+    out
+}
+
+/// The Gross Beat state presets of every group, in order.
+pub fn gross_beat_presets(pack: Option<&Embedded>) -> Vec<Preset> {
+    gross_beat_groups(pack)
+        .into_iter()
+        .flat_map(|g| g.presets)
+        .collect()
+}
+
+/// The list of imported Gross Beat preset folders (`preset-folders.txt`, one path per line).
+fn folders_file() -> Option<PathBuf> {
+    paths::config().map(|d| d.join("preset-folders.txt"))
+}
+
+/// The imported Gross Beat preset folders that still exist.
+pub fn imported_folders() -> Vec<PathBuf> {
+    let Some(text) = folders_file().and_then(|f| std::fs::read_to_string(f).ok()) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .collect()
+}
+
+/// Adds a folder to the imported Gross Beat preset folders.
+pub fn import_folder(dir: &Path) -> std::io::Result<()> {
+    let file = folders_file().ok_or(std::io::ErrorKind::NotFound)?;
+    let mut all = imported_folders();
+    if !all.iter().any(|p| p == dir) {
+        all.push(dir.to_path_buf());
+    }
+    write_folders(&file, &all)
+}
+
+/// Forgets every imported Gross Beat preset folder.
+pub fn forget_folders() -> std::io::Result<()> {
+    match folders_file() {
+        Some(file) => write_folders(&file, &[]),
+        None => Ok(()),
+    }
+}
+
+fn write_folders(file: &Path, all: &[PathBuf]) -> std::io::Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let text: String = all.iter().map(|p| format!("{}\n", p.display())).collect();
+    std::fs::write(file, text)
+}
+
+/// The files with extension `ext` in `dir` and its subfolders down to `depth` levels, sorted by
+/// path, named by their stem.
+fn files_deep(dir: &Path, ext: &str, depth: usize) -> Vec<Preset> {
+    let mut out = files(dir, ext);
+    if depth > 0 {
+        let mut subs: Vec<PathBuf> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        subs.sort();
+        for s in subs {
+            out.extend(files_deep(&s, ext, depth - 1));
+        }
     }
     out
 }
@@ -257,3 +346,33 @@ pub fn collect() -> Result<PackData, String> {
         fonts,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An imported folder's presets (subfolders included) appear as their own group, and
+    /// forgetting the folders removes it.
+    #[test]
+    fn imported_folders_add_a_group() {
+        let root = std::env::temp_dir().join(format!("backspin-presets-{}", std::process::id()));
+        let (config, presets) = (root.join("config"), root.join("My Gross Beat"));
+        std::fs::create_dir_all(presets.join("sub")).unwrap();
+        std::fs::write(presets.join("A.fst"), b"a").unwrap();
+        std::fs::write(presets.join("sub/B.fst"), b"b").unwrap();
+        std::fs::write(presets.join("notes.txt"), b"-").unwrap();
+        // SAFETY: the only test in this crate that reads or writes the variable.
+        unsafe { std::env::set_var("BACKSPIN_CONFIG_DIR", &config) };
+        import_folder(&presets).unwrap();
+        import_folder(&presets).unwrap();
+        assert_eq!(imported_folders(), std::slice::from_ref(&presets));
+        let groups = gross_beat_groups(None);
+        let g = groups.iter().find(|g| g.name == "My Gross Beat").unwrap();
+        let names: Vec<&str> = g.presets.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["A", "B"]);
+        forget_folders().unwrap();
+        assert!(imported_folders().is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+

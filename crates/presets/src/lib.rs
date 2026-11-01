@@ -7,6 +7,7 @@ mod pack;
 pub mod paths;
 
 pub use library::{
-    EDITOR_FONTS, Group, Preset, Source, collect, gross_beat_presets, maps, shape_library,
+    EDITOR_FONTS, Group, Preset, Source, collect, forget_folders, gross_beat_groups,
+    gross_beat_presets, import_folder, imported_folders, maps, shape_library,
 };
 pub use pack::{Embedded, PackData};

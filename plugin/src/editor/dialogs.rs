@@ -594,16 +594,12 @@ fn random_field(d: &mut Dialogs, f: usize) -> i32 {
 
 /// Analyze audio file (0xb9610): picks a file, decodes it and runs the analyzer.
 pub fn analyze_file(gui: &mut Gui, bank: usize, index: usize) {
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter(
-            "Audio files",
-            &["wav", "aif", "aiff", "wv", "mp3", "ogg", "flac", "m4a"],
-        )
-        .pick_file()
-    else {
-        return;
-    };
-    match crate::decode::decode(&path) {
+    super::file_dialog::open(gui, super::file_dialog::Action::Analyze(bank, index));
+}
+
+/// The analysis of the file the dialog of [`analyze_file`] returned.
+pub fn analyze_path(gui: &mut Gui, bank: usize, index: usize, path: &std::path::Path) {
+    match crate::decode::decode(path) {
         Ok((frames, channels, sr)) if !frames.is_empty() => {
             gui.edit_slot(bank, index, false, |s| {
                 s.env.analyze(&frames, channels, sr, 0.0)
