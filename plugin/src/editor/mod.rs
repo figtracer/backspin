@@ -1583,6 +1583,74 @@ mod snapshots {
         assert!(enabled(&gui), "the knob drag toggled the section");
     }
 
+    /// Every toggle of the Gross Beat side: Step, Slide, Freeze, the snap cells, the envelope
+    /// type and the slot's Link, Key-held and One-shot change their state and repaint the frame.
+    #[test]
+    fn every_gross_beat_toggle_works() {
+        let mut gui = gui_with(Some("Patterns"));
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        s.run(&mut gui, &host, vec![vec![]]);
+        let click = |at: Pos2| {
+            let mut f = vec![
+                vec![egui::Event::PointerMoved(at)],
+                vec![button(at, true)],
+                vec![button(at, false)],
+            ];
+            f.extend(std::iter::repeat_n(vec![], 30));
+            f
+        };
+        // Step, Slide and Freeze, each on and off again.
+        type Flag = fn(&Gui) -> bool;
+        let flags: [(f32, Flag); 3] = [
+            (275.0, |g| g.step),
+            (301.0, |g| g.slide),
+            (327.0, |g| g.freeze),
+        ];
+        for (y, flag) in flags {
+            let at = pos2(281.0, y + 13.0);
+            let before = flag(&gui);
+            let uploads = s.run(&mut gui, &host, click(at));
+            assert_eq!(flag(&gui), !before, "toggle at y {y} did not change");
+            assert!(uploads > 0, "toggle at y {y} did not repaint");
+            s.run(&mut gui, &host, click(at));
+            assert_eq!(flag(&gui), before, "toggle at y {y} did not change back");
+        }
+        // The snap cells.
+        for i in (0..7).rev() {
+            s.run(
+                &mut gui,
+                &host,
+                click(pos2(281.0, 40.0 + i as f32 * 27.0 + 13.0)),
+            );
+            assert_eq!(gui.snap, i, "snap cell {i}");
+        }
+        // The envelope type: volume, then time.
+        for k in [1, 0] {
+            s.run(
+                &mut gui,
+                &host,
+                click(pos2(281.0, 470.0 + k as f32 * 26.0 + 13.0)),
+            );
+            assert_eq!(gui.group(), k, "envelope type {k}");
+        }
+        // Link (time only), Key-held and One-shot of the edited slot.
+        let y = EDITOR_SIZE.1 as f32 - backspin_ui::SB_HEIGHT as f32 - 25.0 + 2.0 + 11.0;
+        let slot = |g: &Gui| {
+            let m = g.shared.model.lock();
+            let s = &m.banks[0].slots[g.edited[0]];
+            [s.link, s.key_held, s.one_shot]
+        };
+        for (k, x) in [457.0f32, 480.0, 503.0].into_iter().enumerate() {
+            let before = slot(&gui)[k];
+            let uploads = s.run(&mut gui, &host, click(pos2(x + 11.0, y)));
+            assert_ne!(slot(&gui)[k], before, "slot button {k} did not change");
+            assert!(uploads > 0, "slot button {k} did not repaint");
+            s.run(&mut gui, &host, click(pos2(x + 11.0, y)));
+            assert_eq!(slot(&gui)[k], before, "slot button {k} did not change back");
+        }
+    }
+
     /// A double-click on a rack cell turns that shaper off, and another turns it back on.
     #[test]
     fn rack_double_click_toggles_the_shaper() {
