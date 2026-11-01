@@ -866,7 +866,13 @@ mod snapshots {
         let host = NoHost;
         let setter = ParamSetter::new(&host);
         let ctx = Context::default();
-        let (w, h) = (EDITOR_SIZE.0 as usize, EDITOR_SIZE.1 as usize);
+        // Compact mode renders the narrow window the host is asked for.
+        let w = if gui.compact {
+            COLUMN as usize
+        } else {
+            EDITOR_SIZE.0 as usize
+        };
+        let h = EDITOR_SIZE.1 as usize;
         let input = || egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(w as f32, h as f32))),
             ..Default::default()
@@ -1916,6 +1922,10 @@ mod snapshots {
         render("browser_gross_beat_search", gui_with(None), |g| {
             g.browser.open(browser::Kind::GrossBeat);
             g.browser.search = "st".into();
+        });
+        render("browser_compact", gui_with(Some("Repeater")), |g| {
+            g.compact = true;
+            g.browser.open(browser::Kind::GrossBeat);
         });
         render("browser_shape", gui_with(None), |g| {
             let lib = crate::sb::library();

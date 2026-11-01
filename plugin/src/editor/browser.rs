@@ -535,11 +535,14 @@ pub fn show(gui: &mut Gui, ctx: &Context, setter: &ParamSetter) {
             p.rect_filled(rect, 0.0, BG);
             p.rect_stroke(rect, 0.0, Stroke::new(1.0f32, BORDER), StrokeKind::Inside);
             let b = &mut gui.browser;
+            // A narrow window (compact mode) puts the search box on its own row.
+            let narrow = rect.width() < WIDE;
+            let header_h = if narrow { 2.0 * HEADER + 4.0 } else { HEADER };
             let header_r = Rect::from_min_size(
                 rect.min + vec2(PAD, PAD),
-                vec2(rect.width() - 2.0 * PAD, HEADER),
+                vec2(rect.width() - 2.0 * PAD, header_h),
             );
-            header(b, ui, header_r, kind, &mut acts);
+            header(b, ui, header_r, kind, narrow, &mut acts);
             let body = Rect::from_min_max(
                 pos2(rect.min.x + PAD, header_r.max.y + PAD),
                 pos2(rect.max.x - PAD, rect.max.y - FOOTER - PAD),
@@ -550,7 +553,9 @@ pub fn show(gui: &mut Gui, ctx: &Context, setter: &ParamSetter) {
                     body.with_min_x(body.min.x + TREE_WIDTH + PAD),
                 )
             } else {
-                let split = body.min.y + (body.height() * 0.35).round();
+                // The tree over the list, only as tall as its rows (at most a third).
+                let rows = b.shown.len().max(3) as f32 * ROW + 4.0;
+                let split = body.min.y + rows.min((body.height() * 0.35).round());
                 (body.with_max_y(split), body.with_min_y(split + PAD))
             };
             tree(b, ui, tree_r, kind, &mut acts);
@@ -568,24 +573,37 @@ pub fn show(gui: &mut Gui, ctx: &Context, setter: &ParamSetter) {
 }
 
 /// The title, the search box and the buttons.
-fn header(b: &mut Browser, ui: &mut Ui, r: Rect, kind: Kind, acts: &mut Vec<Act>) {
-    ui.scope_builder(UiBuilder::new().max_rect(r), |ui| {
+fn header(b: &mut Browser, ui: &mut Ui, r: Rect, kind: Kind, narrow: bool, acts: &mut Vec<Act>) {
+    let top = r.with_max_y(r.min.y + HEADER);
+    let search_box = |b: &mut Browser, ui: &mut Ui, width: f32| {
+        let search = ui.add(
+            TextEdit::singleline(&mut b.search)
+                .id(Id::new("browser_search"))
+                .hint_text("Search")
+                .desired_width(width),
+        );
+        if b.focus_search {
+            search.request_focus();
+            b.focus_search = false;
+        }
+    };
+    if narrow {
+        let row = Rect::from_min_max(pos2(r.min.x, top.max.y + 4.0), r.max);
+        ui.scope_builder(UiBuilder::new().max_rect(row), |ui| {
+            ui.horizontal_centered(|ui| search_box(b, ui, row.width() - 8.0));
+        });
+    }
+    ui.scope_builder(UiBuilder::new().max_rect(top), |ui| {
         ui.horizontal_centered(|ui| {
             let title = match kind {
                 Kind::GrossBeat => "Presets",
+                Kind::Shape if narrow => "Shapes",
                 Kind::Shape => "Shape presets",
             };
             ui.label(RichText::new(title).size(14.0).strong().color(TEXT));
-            ui.add_space(4.0);
-            let search = ui.add(
-                TextEdit::singleline(&mut b.search)
-                    .id(Id::new("browser_search"))
-                    .hint_text("Search")
-                    .desired_width(170.0),
-            );
-            if b.focus_search {
-                search.request_focus();
-                b.focus_search = false;
+            if !narrow {
+                ui.add_space(4.0);
+                search_box(b, ui, 170.0);
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if icon_button(ui, Icon::Close, "Close (Esc)").clicked() {
@@ -949,10 +967,15 @@ fn footer(b: &mut Browser, ui: &mut Ui, r: Rect, kind: Kind) {
             b.error = None;
         }
     } else if kind == Kind::GrossBeat {
+        let hint = if left.width() > 320.0 {
+            "Drag a preset onto a folder to move it. Right-click for more."
+        } else {
+            "Right-click for more"
+        };
         p.with_clip_rect(left).text(
             pos2(left.min.x + 2.0, left.center().y),
             Align2::LEFT_CENTER,
-            "Drag a preset onto a folder to move it. Right-click for more.",
+            hint,
             font(11.0),
             DIM,
         );
