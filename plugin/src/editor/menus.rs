@@ -1,9 +1,8 @@
 //! The menus (ui.md section 3).
 
 use super::dialogs::{self, ToolKind};
-use super::file_dialog;
 use super::paint::*;
-use super::{Gui, refusal};
+use super::{Gui, browser, file_dialog, refusal};
 use crate::shared::Command;
 use backspin_engine::envelope::tools::{ToolError, parse_value, value_text};
 use backspin_engine::envelope::{Envelope, SHAPE_MENU};
@@ -42,7 +41,7 @@ pub fn set_clipboard_text(s: &str) {
 }
 
 /// SynthResModule.OptionsMenu (3.1), opened by the Options button.
-pub fn options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Response) {
+pub fn options_menu(gui: &mut Gui, ui: &mut Ui, r: &Response) {
     let id = Id::new("options_menu");
     if r.clicked() {
         ui.memory_mut(|m| m.toggle_popup(id));
@@ -54,34 +53,13 @@ pub fn options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Respon
         egui::PopupCloseBehavior::CloseOnClickOutside,
         |ui| {
             ui.set_min_width(230.0);
-            // Backspin addition: the host's preset list of the original, one titled list per
-            // source (a submenu in this popup would close the popup before its click lands).
-            let groups = backspin_presets::gross_beat_groups(crate::sb::embedded());
-            egui::ScrollArea::vertical()
-                .max_height(420.0)
-                .show(ui, |ui| {
-                    for g in &groups {
-                        title(ui, &format!("Presets: {}", g.name));
-                        for p in &g.presets {
-                            if ui
-                                .selectable_label(p.name == gui.gb_preset, &p.name)
-                                .clicked()
-                            {
-                                load_preset(gui, setter, p);
-                                gui.gb_preset = p.name.clone();
-                                ui.close_menu();
-                            }
-                        }
-                    }
-                });
-            if ui.button("Import preset folder...").clicked() {
-                file_dialog::open(gui, file_dialog::Action::ImportFolder);
+            // Backspin addition: the host's preset handling of the original.
+            if ui.button("Browse presets...").clicked() {
+                gui.browser.open(browser::Kind::GrossBeat);
                 ui.close_menu();
             }
-            if !backspin_presets::imported_folders().is_empty()
-                && ui.button("Forget imported folders").clicked()
-            {
-                let _ = backspin_presets::forget_folders();
+            if ui.button("Import preset folder...").clicked() {
+                file_dialog::open(gui, file_dialog::Action::ImportFolder);
                 ui.close_menu();
             }
             if ui.button("Open preset file...").clicked() {
@@ -140,13 +118,6 @@ pub fn options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Respon
             if ui.checkbox(&mut view, "View scratching clock").changed() {
                 gui.shared.model.lock().view_scratch = view as u8;
             }
-            ui.separator();
-            ui.menu_button("About", |ui| {
-                if ui.button("About").clicked() {
-                    gui.dialogs.about = true;
-                    ui.close_menu();
-                }
-            });
         },
     );
 }

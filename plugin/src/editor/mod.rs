@@ -3,6 +3,7 @@
 //! The editor works on the model engine in [`Shared`] and sends every change to the audio engine
 //! (`Shared::send_slot` and friends). Host parameters go through the [`ParamSetter`].
 
+mod browser;
 mod dialogs;
 mod envelope;
 mod file_dialog;
@@ -81,6 +82,8 @@ pub struct Gui {
     pub default_shape: u8,
     pub env: envelope::EnvState,
     pub dialogs: dialogs::Dialogs,
+    /// The preset browser (a Backspin addition).
+    pub browser: browser::Browser,
     /// A knob being dragged: parameter index, start value and the accumulated pointer travel.
     knob_drag: Option<(usize, f32, f32)>,
     /// The scratch clock drag: the last pointer angle and the current value.
@@ -98,8 +101,8 @@ pub struct Gui {
     pub sb_preset: Option<backspin_presets::Source>,
     pub sb_selected: usize,
     pub sb_band: usize,
-    /// The last Gross Beat preset loaded from the header.
-    pub gb_preset: String,
+    /// The last Gross Beat preset loaded from the browser or a file.
+    pub gb_preset: Option<backspin_presets::Preset>,
     /// The shape mix knob drag and the wave view's band mix drag: the start value and the
     /// pointer travel.
     pub sb_mix_drag: Option<(f32, f32)>,
@@ -142,6 +145,7 @@ impl Gui {
             default_shape: 2,
             env: envelope::EnvState::default(),
             dialogs: dialogs::Dialogs::default(),
+            browser: browser::Browser::default(),
             knob_drag: None,
             scratch_drag: None,
             last_status,
@@ -152,7 +156,7 @@ impl Gui {
             sb_preset: None,
             sb_selected: 5,
             sb_band: 1,
-            gb_preset: "(current)".into(),
+            gb_preset: None,
             sb_mix_drag: None,
             sb_band_drag: None,
             sb_point_drag: None,
@@ -171,6 +175,7 @@ impl Gui {
         self.sb_mix_drag = None;
         self.sb_band_drag = None;
         self.sb_point_drag = None;
+        self.browser.open = None;
     }
 
     /// Selects shaper `k` in the ShaperBox section and shows the band its split selects.
@@ -321,6 +326,7 @@ impl Gui {
                     }
                 }
             });
+        browser::show(self, ctx, setter);
         dialogs::show(self, ctx, setter);
     }
 
@@ -348,7 +354,7 @@ impl Gui {
         if r.hovered() {
             self.hint = "Options".into();
         }
-        menus::options_menu(self, ui, setter, &r);
+        menus::options_menu(self, ui, &r);
 
         // HOLD button (parameter 7, a direct-click toggle).
         let hold = Rect::from_min_size(pos2(109.0, 60.0), vec2(63.0, 30.0));
@@ -1726,12 +1732,197 @@ mod snapshots {
             super::file_dialog::Action::GrossBeatPreset,
             &dir.join("Stutter.fst"),
         );
-        assert_eq!(gui.gb_preset, "Stutter");
+        assert_eq!(
+            gui.gb_preset.as_ref().map(|p| p.name.as_str()),
+            Some("Stutter")
+        );
         let named = gui.shared.model.lock().banks[0]
             .slots
             .iter()
             .filter(|s| !s.name.is_empty())
             .count();
         assert!(named > 0, "the preset's slots did not load");
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }
+    }
+
+    /// The slots named in the time bank (a loaded factory preset names some).
+    fn named_slots(gui: &Gui) -> usize {
+        gui.shared.model.lock().banks[0]
+            .slots
+            .iter()
+            .filter(|s| !s.name.is_empty())
+            .count()
+    }
+
+    /// The Gross Beat browser: typing in the search box and pressing Enter loads the first
+    /// match, the arrow keys move the cursor, and Escape closes the browser.
+    #[test]
+    fn browser_search_and_keys_load_presets() {
+        let folders = backspin_presets::gross_beat_folders(crate::sb::embedded());
+        let factory = &folders[0];
+        let Some(stutter) = factory.presets.iter().find(|p| p.name == "Stutter") else {
+            return;
+        };
+        if factory.presets.len() < 3 {
+            return;
+        }
+        let mut gui = gui_with(None);
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        gui.browser.open(browser::Kind::GrossBeat);
+        s.run(
+            &mut gui,
+            &host,
+            vec![vec![], vec![egui::Event::Text("stutt".into())], vec![]],
+        );
+        s.run(&mut gui, &host, vec![vec![key(egui::Key::Enter)], vec![]]);
+        assert_eq!(
+            gui.gb_preset.as_ref().map(|p| &p.source),
+            Some(&stutter.source),
+            "the search did not load Stutter"
+        );
+        assert!(named_slots(&gui) > 0, "the preset did not reach the model");
+        // Clearing the search lists the folder with the cursor on the loaded preset; Up twice
+        // and Enter loads the preset two rows above it.
+        let at = factory
+            .presets
+            .iter()
+            .position(|p| p.name == "Stutter")
+            .unwrap();
+        if at < 2 {
+            return;
+        }
+        gui.browser.search.clear();
+        s.run(&mut gui, &host, vec![vec![], vec![]]);
+        s.run(
+            &mut gui,
+            &host,
+            vec![
+                vec![key(egui::Key::ArrowUp)],
+                vec![key(egui::Key::ArrowUp)],
+                vec![key(egui::Key::Enter)],
+                vec![],
+            ],
+        );
+        assert_eq!(
+            gui.gb_preset.as_ref().map(|p| &p.source),
+            Some(&factory.presets[at - 2].source)
+        );
+        s.run(&mut gui, &host, vec![vec![key(egui::Key::Escape)], vec![]]);
+        assert!(
+            gui.browser.open.is_none(),
+            "Escape did not close the browser"
+        );
+    }
+
+    /// A click on a row loads that preset.
+    #[test]
+    fn browser_click_loads_a_preset() {
+        let folders = backspin_presets::gross_beat_folders(crate::sb::embedded());
+        let factory = &folders[0];
+        if factory.presets.len() < 2 {
+            return;
+        }
+        let key = factory
+            .path
+            .as_ref()
+            .map_or_else(|| factory.name.clone(), |p| p.display().to_string());
+        let mut gui = gui_with(None);
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        gui.browser.open(browser::Kind::GrossBeat);
+        s.run(&mut gui, &host, vec![vec![], vec![]]);
+        let row = s
+            .ctx
+            .read_response(Id::new(("browser_row", &key, &factory.presets[1].name)))
+            .expect("the second row is shown");
+        s.run(&mut gui, &host, click(row.rect.center()));
+        assert_eq!(
+            gui.gb_preset.as_ref().map(|p| &p.source),
+            Some(&factory.presets[1].source)
+        );
+    }
+
+    /// A preset dragged onto a folder of the tree moves on disk, and the list follows.
+    #[test]
+    fn browser_drag_moves_a_preset() {
+        let root = std::env::temp_dir().join(format!("backspin-browser-{}", std::process::id()));
+        let (lib, sub) = (root.join("Lib"), root.join("Lib/Sub"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(lib.join("A.fst"), b"a").unwrap();
+        std::fs::write(sub.join("B.fst"), b"b").unwrap();
+        // SAFETY: the only test in this binary that sets the variable. The other tests only
+        // read it, and they accept any imported folder.
+        unsafe { std::env::set_var("BACKSPIN_CONFIG_DIR", root.join("config")) };
+        backspin_presets::import_folder(&lib).unwrap();
+        let mut gui = gui_with(None);
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        gui.browser.show_folder(&lib);
+        s.run(&mut gui, &host, vec![vec![], vec![]]);
+        let (lib_key, sub_key) = (lib.display().to_string(), sub.display().to_string());
+        let row = s
+            .ctx
+            .read_response(Id::new(("browser_row", &lib_key, "A")))
+            .expect("the row of A");
+        let folder = s
+            .ctx
+            .read_response(Id::new(("browser_folder", &sub_key)))
+            .expect("the Sub folder");
+        s.run(
+            &mut gui,
+            &host,
+            drag(row.rect.center(), folder.rect.center(), 8),
+        );
+        assert!(
+            sub.join("A.fst").is_file(),
+            "A did not move: {:?}",
+            gui.browser.error
+        );
+        assert!(!lib.join("A.fst").exists());
+        s.run(&mut gui, &host, vec![vec![], vec![]]);
+        assert!(
+            s.ctx
+                .read_response(Id::new(("browser_row", &sub_key, "A")))
+                .is_some(),
+            "the list does not show the moved preset"
+        );
+        backspin_presets::forget_folder(&lib).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The browser open on each kind of preset, for a look at the layout.
+    #[test]
+    #[ignore = "writes images; run on demand"]
+    fn browser_snapshots() {
+        render("browser_gross_beat", gui_with(Some("Repeater")), |g| {
+            g.gb_preset = backspin_presets::gross_beat_folders(crate::sb::embedded())[0]
+                .presets
+                .iter()
+                .find(|p| p.name == "Repeater")
+                .cloned();
+            g.browser.open(browser::Kind::GrossBeat);
+        });
+        render("browser_gross_beat_search", gui_with(None), |g| {
+            g.browser.open(browser::Kind::GrossBeat);
+            g.browser.search = "st".into();
+        });
+        render("browser_shape", gui_with(None), |g| {
+            let lib = crate::sb::library();
+            *g.sb_library.lock() = Some(lib);
+            g.sb_loading = true;
+            g.sb_pack = 1;
+            g.browser.open(browser::Kind::Shape);
+        });
     }
 }
