@@ -423,6 +423,54 @@ mod tests {
         assert!(stages[2].state < 0.0 && stages[2].state > target as f64);
     }
 
+    /// A slot swap that leaves the cursor past the new envelope's last point re-seats the cursor:
+    /// before, the lanes rescaled their stale work buffers every block until they overflowed.
+    #[test]
+    fn slot_swap_past_the_cursor_keeps_the_lanes_finite() {
+        let mut e = engine();
+        // Four short segments, so the cursor's segment index climbs to 3.
+        let mut long = Slot {
+            env: Envelope::with_points(
+                1.0,
+                vec![
+                    Point::new(0.0, 1.0, 0.0, Shape::HOLD),
+                    Point::new(0.25, 0.5, 0.0, Shape::SINGLE_CURVE),
+                    Point::new(0.25, 1.0, 0.0, Shape::SINGLE_CURVE),
+                    Point::new(0.25, 0.5, 0.0, Shape::SINGLE_CURVE),
+                    Point::new(0.25, 1.0, 0.0, Shape::SINGLE_CURVE),
+                ],
+            ),
+            ..Slot::default()
+        };
+        long.update_empty();
+        for bank in 0..2 {
+            e.swap_slot(bank, 0, &mut long.clone());
+        }
+        e.process_param(6, 200, REC_UPDATE_VALUE);
+        e.set_playing(true);
+        // 0.9 beats in: the cursor is in the fourth segment of both banks.
+        for k in 0..((48000.0 * 0.45 / 256.0) as usize) {
+            e.render(&mut ramp(k * 256, 256));
+        }
+        assert!(e.banks[0].cursor.idx >= 3 && e.banks[1].cursor.idx >= 3);
+        let pos = e.banks[0].cursor.position(&long.env);
+        let short = moving_slot();
+        for bank in 0..2 {
+            e.swap_slot(bank, 0, &mut short.clone());
+        }
+        assert_eq!(e.banks[0].cursor.idx, 1);
+        assert!((e.banks[0].cursor.position(&short.env) - pos).abs() < 1e-9);
+        for k in 0..400 {
+            let mut buf = ramp(0, 256);
+            e.render(&mut buf);
+            assert!(
+                buf.iter().all(|f| f[0].abs() < 1.0 && f[1].abs() < 1.0),
+                "block {k}: {:?}",
+                buf[0]
+            );
+        }
+    }
+
     #[test]
     fn tempo_change_crossfades_one_block() {
         let mut e = engine();

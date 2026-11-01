@@ -362,9 +362,19 @@ impl Engine {
     }
 
     /// Replaces a slot (the editor edits the slot object in place in the original) and returns
-    /// the old one in `slot`.
+    /// the old one in `slot`. When the slot plays and the new envelope has fewer points than the
+    /// cursor's segment, the cursor is re-seated at the same position: a cursor past the last
+    /// point renders nothing, and the time and volume lanes would then rescale the stale work
+    /// buffers block after block until they overflow.
     pub fn swap_slot(&mut self, bank: usize, index: usize, slot: &mut Slot) {
-        std::mem::swap(&mut self.banks[bank].slots[index], slot);
+        let b = &mut self.banks[bank];
+        std::mem::swap(&mut b.slots[index], slot);
+        let env = &b.slots[index].env;
+        if index == b.active_slot && b.cursor.idx > env.hi() {
+            let pos = b.cursor.position(&slot.env);
+            b.cursor = Cursor::new(env);
+            b.cursor.advance(env, pos);
+        }
     }
 
     /// Moves a slot from `from` to `to` by successive swaps of neighbours (0x6c3e0). The active,
