@@ -11,6 +11,9 @@ pub struct Ring {
     len: usize,
     /// Write position in ring frames, `0..=len`.
     write: usize,
+    /// Ring frames written since the ring was last all zero (at most `len`): they end at
+    /// `write`, so [`Ring::zero`] clears only them.
+    dirty: usize,
 }
 
 impl Ring {
@@ -20,9 +23,12 @@ impl Ring {
     pub fn resize(&mut self, block: usize, delay: usize) {
         let total = 4 * GUARD + delay + block;
         self.len = total - 2 * GUARD;
-        self.data.clear();
-        self.data.resize(self.len + 2 * GUARD, [0.0; 2]);
+        // A fresh zeroed allocation: the system maps its pages as the ring first writes them,
+        // so the 72 s ring does not take its full size in memory until it has been played
+        // through (`resize` would write every frame up front).
+        self.data = vec![[0.0; 2]; self.len + 2 * GUARD];
         self.write = GUARD + delay;
+        self.dirty = 0;
     }
 
     /// The number of ring frames.
@@ -40,14 +46,30 @@ impl Ring {
         self.write
     }
 
-    /// Zeroes every frame. The write position is kept (0x249d70).
+    /// Zeroes every frame. The write position is kept (0x249d70). Only the frames written
+    /// since the last zero are cleared (the rest are zero already), so a flush or a stop does
+    /// not write the whole 72 s ring on the audio thread.
     pub fn zero(&mut self) {
-        self.data.fill([0.0; 2]);
+        let (len, w, n) = (self.len, self.write, self.dirty);
+        if n >= len {
+            self.data.fill([0.0; 2]);
+        } else if n > 0 {
+            if n <= w {
+                self.data[GUARD + w - n..GUARD + w].fill([0.0; 2]);
+            } else {
+                self.data[GUARD..GUARD + w].fill([0.0; 2]);
+                self.data[GUARD + len - (n - w)..GUARD + len].fill([0.0; 2]);
+            }
+            self.data[..GUARD].fill([0.0; 2]);
+            self.data[GUARD + len..].fill([0.0; 2]);
+        }
+        self.dirty = 0;
     }
 
     /// Appends `src` at the write position, wrapping at the end, then refreshes both mirrors
     /// (0x24a310).
     pub fn record(&mut self, src: &[[f32; 2]]) {
+        self.dirty = (self.dirty + src.len()).min(self.len);
         let mut src = src;
         let room = self.len - self.write;
         if room < src.len() {
@@ -71,5 +93,35 @@ impl Ring {
     #[inline]
     pub fn frame(&self, i: usize, j: isize) -> [f32; 2] {
         self.data[(GUARD + i).wrapping_add_signed(j)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Clearing only the written frames leaves the whole ring zero, mirrors included, for any
+    /// mix of block sizes and wraps.
+    #[test]
+    fn zero_clears_every_written_frame() {
+        let mut ring = Ring::default();
+        ring.resize(64, 1000);
+        let mut seed = 7u32;
+        let mut next = |m: u32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) % m
+        };
+        for round in 0..400 {
+            for _ in 0..next(40) {
+                let n = 1 + next(64) as usize;
+                let block: Vec<[f32; 2]> = (0..n).map(|k| [k as f32 + 1.0, -1.0]).collect();
+                ring.record(&block);
+            }
+            ring.zero();
+            assert!(
+                ring.data.iter().all(|f| *f == [0.0; 2]),
+                "round {round}: frames left after zero"
+            );
+        }
     }
 }
