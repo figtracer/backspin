@@ -6,6 +6,8 @@
 
 [Quick start](#quick-start) | [Parity report](PORT_REPORT.md) | [Spec](SPEC.md) | [Builder prompt](PORT_PROMPT.md)
 
+<img src="docs/screenshot.png" alt="The Backspin editor: time and volume slot banks, the envelope editor and the shape section" width="830">
+
 </div>
 
 ---
