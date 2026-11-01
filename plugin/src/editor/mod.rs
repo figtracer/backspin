@@ -1945,6 +1945,41 @@ mod snapshots {
         );
     }
 
+    /// Picking an item of the options menu closes the menu.
+    #[test]
+    fn options_menu_closes_after_a_pick() {
+        let mut gui = gui_with(None);
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        s.run(&mut gui, &host, vec![vec![]]);
+        let click = |at: Pos2| {
+            let mut f = vec![
+                vec![egui::Event::PointerMoved(at)],
+                vec![button(at, true)],
+                vec![button(at, false)],
+            ];
+            f.extend(std::iter::repeat_n(vec![], 10));
+            f
+        };
+        s.run(&mut gui, &host, click(pos2(17.0, 76.0)));
+        assert!(
+            s.ctx.memory(|m| m.any_popup_open()),
+            "the options menu did not open"
+        );
+        // The first item, "Browse presets...", sits right under the button.
+        let item = s
+            .ctx
+            .memory(|m| m.area_rect(Id::new("options_menu")))
+            .map(|r| pos2(r.min.x + 40.0, r.min.y + 14.0))
+            .expect("the menu area");
+        s.run(&mut gui, &host, click(item));
+        assert!(gui.browser.open.is_some(), "the browser did not open");
+        assert!(
+            !s.ctx.memory(|m| m.any_popup_open()),
+            "the options menu stayed open"
+        );
+    }
+
     /// A preset dragged onto a folder of the tree moves on disk, and the list follows.
     #[test]
     fn browser_drag_moves_a_preset() {

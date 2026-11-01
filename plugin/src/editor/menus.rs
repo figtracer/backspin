@@ -56,19 +56,19 @@ pub fn options_menu(gui: &mut Gui, ui: &mut Ui, r: &Response) {
             // Backspin addition: the host's preset handling of the original.
             if ui.button("Browse presets...").clicked() {
                 gui.browser.open(browser::Kind::GrossBeat);
-                ui.close_menu();
+                ui.memory_mut(|m| m.close_popup());
             }
             if ui.button("Import preset folder...").clicked() {
                 file_dialog::open(gui, file_dialog::Action::ImportFolder);
-                ui.close_menu();
+                ui.memory_mut(|m| m.close_popup());
             }
             if ui.button("Open preset file...").clicked() {
                 file_dialog::open(gui, file_dialog::Action::GrossBeatPreset);
-                ui.close_menu();
+                ui.memory_mut(|m| m.close_popup());
             }
             if ui.button("Open shape preset file...").clicked() {
                 file_dialog::open(gui, file_dialog::Action::ShapePreset);
-                ui.close_menu();
+                ui.memory_mut(|m| m.close_popup());
             }
             ui.separator();
             let (mut midi, mut click, mut comp, mut dc, mut hq, mut view) = {
@@ -252,6 +252,7 @@ pub fn env_options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Re
                                 if ui.button(&p.name).clicked() {
                                     load_fnv_bytes(gui, p.bytes());
                                     ui.close_menu();
+                                    ui.memory_mut(|m| m.close_popup());
                                 }
                             }
                         });
