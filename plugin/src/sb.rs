@@ -3,6 +3,7 @@
 
 use backspin_shaperbox::graph::Processor;
 use backspin_shaperbox::state::State;
+use backspin_shaperbox::wave::Point;
 use backspin_shaperbox::{Tree, Var, read_preset, write_preset};
 use parking_lot::Mutex;
 use rtrb::{Consumer, Producer, RingBuffer};
@@ -166,14 +167,7 @@ impl Shared {
             let Some(band) = m.tree.as_mut().and_then(|t| band_tree(t, k, b)) else {
                 return;
             };
-            let Some(lfo) = band
-                .children
-                .iter_mut()
-                .find(|c| c.kind.starts_with("Section"))
-                .and_then(|sec| sec.children.iter_mut().find(|c| has_id(c, "lfo")))
-            else {
-                return;
-            };
+            let Some(lfo) = first_lfo(band) else { return };
             let now = lfo
                 .children
                 .iter()
@@ -187,6 +181,43 @@ impl Shared {
             set_leaf(lfo, "int", "length", Var::Int((now + step).clamp(0, max)));
         }
         self.push();
+    }
+
+    /// Replaces the points of band `b`'s first LFO wave of shaper `k`; `push` rebuilds the
+    /// processors (at the end of a drag).
+    pub fn set_lfo_points(&self, k: usize, b: usize, points: &[Point], push: bool) {
+        {
+            let mut m = self.model.lock();
+            let Some(list) = m
+                .tree
+                .as_mut()
+                .and_then(|t| band_tree(t, k, b))
+                .and_then(first_lfo)
+                .and_then(|lfo| lfo.children.iter_mut().find(|c| has_id(c, "wave")))
+                .and_then(|wave| wave.children.iter_mut().find(|c| has_id(c, "points")))
+            else {
+                return;
+            };
+            // New nodes copy an existing point, keeping the preset's node and leaf kinds.
+            let template = list.children.first().cloned().unwrap_or_else(|| Tree {
+                kind: "Point".into(),
+                props: Vec::new(),
+                children: Vec::new(),
+            });
+            list.children = points
+                .iter()
+                .map(|p| {
+                    let mut node = template.clone();
+                    set_leaf(&mut node, "int", "x", Var::Int(p.x));
+                    set_leaf(&mut node, "float", "y", Var::Double(p.y as f64));
+                    set_leaf(&mut node, "int", "factor", Var::Int(p.factor));
+                    node
+                })
+                .collect();
+        }
+        if push {
+            self.push();
+        }
     }
 
     /// Turns shaper `k` on or off (on also makes it visible: the plugin processes visible shapers
@@ -260,6 +291,16 @@ fn band_tree(tree: &mut Tree, k: usize, b: usize) -> Option<&mut Tree> {
         .find(|c| has_id(c, "bands"))?
         .children
         .get_mut(b)
+}
+
+/// The first LFO of a band tree.
+fn first_lfo(band: &mut Tree) -> Option<&mut Tree> {
+    band.children
+        .iter_mut()
+        .find(|c| c.kind.starts_with("Section"))?
+        .children
+        .iter_mut()
+        .find(|c| has_id(c, "lfo"))
 }
 
 /// Sets the `<type id=.. value=..>` leaf `id` of the shaper `k` in a state tree, adding it after
@@ -347,5 +388,50 @@ mod tests {
             s.shapers[k].bands[1].sections[0].lfo.length,
             if length > 0 { length - 1 } else { 1 }
         );
+    }
+
+    /// The point setter edits the wave the processors are built from, and the audio follows.
+    #[test]
+    fn point_edits_reach_the_state() {
+        let lib = library();
+        let Some(all) = lib.first() else { return };
+        let (shared, _audio) = new();
+        let found = all.presets.iter().take(200).find_map(|p| {
+            let tree = read_preset(&p.bytes()?).ok()?;
+            let s = State::from_tree(&tree);
+            let k = (0..16).find(|&k| {
+                s.shapers[k].visible
+                    && s.shapers[k].bands[1]
+                        .sections
+                        .first()
+                        .is_some_and(|sec| sec.lfo.points.len() >= 2)
+            })?;
+            Some((
+                tree,
+                k,
+                s.shapers[k].bands[1].sections[0].lfo.points.clone(),
+            ))
+        });
+        let Some((tree, k, mut points)) = found else {
+            return;
+        };
+        shared.model.lock().tree = Some(tree);
+        points[0].y = -0.5;
+        points[1].factor = if points[1].factor == 1 { 3 } else { 1 };
+        points.push(Point {
+            x: 8191,
+            y: 0.25,
+            factor: 3,
+        });
+        points.retain(|p| p.x <= 8191);
+        points.sort_by_key(|p| p.x);
+        points.dedup_by_key(|p| p.x);
+        shared.set_lfo_points(k, 1, &points, true);
+        let s = shared.model.lock().state();
+        assert_eq!(s.shapers[k].bands[1].sections[0].lfo.points, points);
+        // The edited tree still writes and reads back.
+        let bytes = shared.model.lock().to_bytes();
+        let back = Model::from_bytes(&bytes).state();
+        assert_eq!(back.shapers[k].bands[1].sections[0].lfo.points, points);
     }
 }

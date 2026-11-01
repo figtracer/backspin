@@ -9,13 +9,13 @@ use crate::params::{CLAMP_MODES, CLAMP_OVERSAMPLING, CLAMP_TYPES};
 use backspin_gfx::Rect as DRect;
 use backspin_presets::{Group, Preset};
 use backspin_shaperbox::state::State;
-use backspin_shaperbox::wave::{LENGTHS, Point, rate_hz, render_table};
+use backspin_shaperbox::wave::{LENGTHS, Point, TABLE, rate_hz, render_table};
 use backspin_ui::sb::{ACCENT, layout};
 use backspin_ui::{HEIGHT, SbModel, ShaperCell};
 use nih_plug::prelude::{FloatParam, IntParam, Param, ParamSetter};
 use nih_plug_egui::egui::{
-    self, AboveOrBelow, Color32, Id, PointerButton, PopupCloseBehavior, Rect, Response, ScrollArea,
-    Sense, Ui, pos2,
+    self, AboveOrBelow, Color32, Id, PointerButton, PopupCloseBehavior, Pos2, Rect, Response,
+    ScrollArea, Sense, Ui, pos2,
 };
 use std::sync::atomic::Ordering;
 
@@ -331,9 +331,10 @@ fn mix_knob(gui: &mut Gui, ui: &mut Ui) {
     );
 }
 
-/// The wave view: vertical drag sets the band's mix (Ctrl finer), the wheel steps the LFO length
-/// through the sync divisions, double-click resets the mix to 100 %. The processors are rebuilt
-/// when a drag ends.
+/// The wave view. On a point: drag moves it (Ctrl finer in `y`), double-click deletes it and
+/// right-click toggles a soft point and a corner. Elsewhere: vertical drag sets the band's mix
+/// and double-click adds a corner point. The wheel steps the LFO length through the sync
+/// divisions. The processors are rebuilt when a drag ends.
 fn wave_view(gui: &mut Gui, ui: &mut Ui) {
     let resp = ui.interact(
         at(layout::WAVE),
@@ -341,20 +342,68 @@ fn wave_view(gui: &mut Gui, ui: &mut Ui) {
         Sense::click_and_drag(),
     );
     let (k, b) = (gui.sb_selected, gui.sb_band);
-    let mix = {
+    let band = {
         let m = gui.shared.sb.model.lock();
-        m.tree
-            .as_ref()
-            .map(|t| State::from_tree(t).shapers[k].bands[b].mix)
+        m.tree.as_ref().map(|t| {
+            let band = &State::from_tree(t).shapers[k].bands[b];
+            let points = band.sections.first().map(|s| s.lfo.points.clone());
+            (band.mix, points)
+        })
     };
-    let Some(mix) = mix else { return };
+    let Some((mix, points)) = band else { return };
+    let r = resp.rect;
+    let (fw, fh) = (r.width() - 1.0, r.height() - 1.0);
+    // The point whose marker (drawn on the curve, as the painter does) is under `pos`.
+    let hit = |pos: Pos2| {
+        let points = points.as_deref()?;
+        let table = render_table(points);
+        let n = table.len().max(1);
+        points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let px = p.x as f32 / TABLE as f32;
+                let v = table.get(((px * n as f32) as usize).min(n - 1)).copied();
+                let y = fh * (1.0 - (v.unwrap_or(p.y) + 1.0) * 0.5);
+                (i, pos.distance(pos2(r.min.x + px * fw, r.min.y + y)))
+            })
+            .filter(|&(_, d)| d <= 6.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    };
     if resp.drag_started_by(PointerButton::Primary) {
-        gui.sb_band_drag = Some((mix, 0.0));
+        let origin = ui.input(|i| i.pointer.press_origin());
+        match origin.and_then(hit).zip(points.as_ref()) {
+            Some((i, pts)) => gui.sb_point_drag = Some((i, pts[i].y, 0.0)),
+            None => gui.sb_band_drag = Some((mix, 0.0)),
+        }
+    }
+    let fine = ui.input(|i| i.modifiers.command);
+    if let Some((i, y0, travel)) = gui.sb_point_drag
+        && resp.dragged_by(PointerButton::Primary)
+        && let Some(mut pts) = points.clone()
+        && let Some(pos) = resp.interact_pointer_pos()
+        && i < pts.len()
+    {
+        let travel = travel - resp.drag_delta().y / if fine { 16.0 } else { 1.0 };
+        gui.sb_point_drag = Some((i, y0, travel));
+        // A point stays between its neighbours, so the indices keep their order.
+        let lo = if i == 0 { 0 } else { pts[i - 1].x + 1 };
+        let hi = pts.get(i + 1).map_or(TABLE as i32 - 1, |p| p.x - 1).max(lo);
+        let x = ((pos.x - r.min.x) / fw * TABLE as f32).round() as i32;
+        pts[i].x = x.clamp(lo, hi);
+        pts[i].y = (y0 + travel * 2.0 / fh).clamp(-1.0, 1.0);
+        gui.shared.sb.set_lfo_points(k, b, &pts, false);
+    }
+    if resp.drag_stopped_by(PointerButton::Primary)
+        && gui.sb_point_drag.take().is_some()
+        && let Some(pts) = &points
+    {
+        gui.shared.sb.set_lfo_points(k, b, pts, true);
     }
     if let Some((start, travel)) = gui.sb_band_drag
         && resp.dragged_by(PointerButton::Primary)
     {
-        let fine = ui.input(|i| i.modifiers.command);
         let travel = travel - resp.drag_delta().y / if fine { 16.0 } else { 1.0 };
         gui.sb_band_drag = Some((start, travel));
         let v = (start + travel / resp.rect.height()).clamp(0.0, 1.0);
@@ -363,8 +412,37 @@ fn wave_view(gui: &mut Gui, ui: &mut Ui) {
     if resp.drag_stopped_by(PointerButton::Primary) && gui.sb_band_drag.take().is_some() {
         gui.shared.sb.set_band_mix(k, b, mix, true);
     }
-    if resp.double_clicked() {
-        gui.shared.sb.set_band_mix(k, b, 1.0, true);
+    let pos = resp.interact_pointer_pos().or(resp.hover_pos());
+    let under = pos.and_then(hit);
+    if let Some(mut pts) = points.clone()
+        && let Some(pos) = pos
+    {
+        if resp.double_clicked() {
+            match under {
+                // The wave keeps at least one point (a constant).
+                Some(i) if pts.len() > 1 => {
+                    pts.remove(i);
+                    gui.shared.sb.set_lfo_points(k, b, &pts, true);
+                }
+                Some(_) => {}
+                None => {
+                    let x = (((pos.x - r.min.x) / fw * TABLE as f32).round() as i32)
+                        .clamp(0, TABLE as i32 - 1);
+                    let y = (1.0 - 2.0 * (pos.y - r.min.y) / fh).clamp(-1.0, 1.0);
+                    let at = pts.partition_point(|p| p.x < x);
+                    if pts.get(at).is_none_or(|p| p.x != x) {
+                        // A corner point: the curve passes through where the click was.
+                        pts.insert(at, Point { x, y, factor: 3 });
+                        gui.shared.sb.set_lfo_points(k, b, &pts, true);
+                    }
+                }
+            }
+        } else if resp.secondary_clicked()
+            && let Some(i) = under
+        {
+            pts[i].factor = if pts[i].factor >= 3 { 1 } else { 3 };
+            gui.shared.sb.set_lfo_points(k, b, &pts, true);
+        }
     }
     if resp.hovered() {
         let scroll = ui.input(|i| i.raw_scroll_delta.y);
@@ -373,12 +451,19 @@ fn wave_view(gui: &mut Gui, ui: &mut Ui) {
                 .sb
                 .step_lfo_length(k, b, if scroll > 0.0 { 1 } else { -1 });
         }
-        gui.hint = format!(
-            "{} {} band mix {:.0}%: drag to change, wheel for the rate, double-click for 100%",
-            NAMES[k],
-            BANDS[b],
-            mix * 100.0
-        );
+        gui.hint = if under.is_some() || gui.sb_point_drag.is_some() {
+            "Point: drag to move, double-click to delete, right-click for a soft or sharp \
+             corner"
+                .into()
+        } else {
+            format!(
+                "{} {} band mix {:.0}%: drag to change, double-click to add a point, wheel for \
+                 the rate",
+                NAMES[k],
+                BANDS[b],
+                mix * 100.0
+            )
+        };
     }
 }
 

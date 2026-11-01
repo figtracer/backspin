@@ -104,6 +104,8 @@ pub struct Gui {
     /// pointer travel.
     pub sb_mix_drag: Option<(f32, f32)>,
     pub sb_band_drag: Option<(f32, f32)>,
+    /// The wave view's point drag: the point's index, its start `y` and the pointer travel.
+    pub sb_point_drag: Option<(usize, f32, f32)>,
     /// The code-exact frame of the open editor window.
     frame: frame::FrameCache,
     /// The file dialog that is open (behind a mutex: the editor state must be `Sync`).
@@ -151,6 +153,7 @@ impl Gui {
             gb_preset: "(current)".into(),
             sb_mix_drag: None,
             sb_band_drag: None,
+            sb_point_drag: None,
             frame: frame::FrameCache::default(),
             file_dialog: parking_lot::Mutex::new(None),
         }
@@ -164,6 +167,7 @@ impl Gui {
         self.scratch_drag = None;
         self.sb_mix_drag = None;
         self.sb_band_drag = None;
+        self.sb_point_drag = None;
     }
 
     /// Selects shaper `k` in the ShaperBox section and shows the band its split selects.
@@ -1351,6 +1355,87 @@ mod snapshots {
             "processors not rebuilt"
         );
         assert!(uploads > 0, "the frame was not repainted");
+    }
+
+    /// Point editing in the wave view: a drag moves a point, a double-click on empty space adds
+    /// one and a double-click on a point deletes it.
+    #[test]
+    fn wave_view_edits_points() {
+        use backspin_shaperbox::wave::{Point, render_table};
+        let Some((mut gui, k)) = gui_with_shape() else {
+            return;
+        };
+        let points = |g: &Gui| {
+            g.shared.sb.model.lock().state().shapers[k].bands[1].sections[0]
+                .lfo
+                .points
+                .clone()
+        };
+        let before = points(&gui);
+        let w = backspin_ui::sb::layout::WAVE;
+        let (fw, fh) = ((w.x1 - w.x0 - 1) as f32, (w.y1 - w.y0 - 1) as f32);
+        // Where the painter draws point `i`'s marker: on the curve.
+        let marker = |pts: &[Point], i: usize| {
+            let table = render_table(pts);
+            let px = pts[i].x as f32 / 8192.0;
+            let v = table[((px * table.len() as f32) as usize).min(table.len() - 1)];
+            section(w.x0, w.y0) + vec2(px * fw, fh * (1.0 - (v + 1.0) * 0.5))
+        };
+        // A point whose marker is clear of the others.
+        let Some(i) = (0..before.len()).find(|&i| {
+            (0..before.len())
+                .all(|j| j == i || marker(&before, i).distance(marker(&before, j)) > 14.0)
+        }) else {
+            return;
+        };
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        s.run(&mut gui, &host, vec![vec![]]);
+        let from = marker(&before, i);
+        let down = before[i].y > 0.0;
+        let to = from + vec2(0.0, if down { 30.0 } else { -30.0 });
+        let uploads = s.run(&mut gui, &host, drag(from, to, 6));
+        let moved = points(&gui);
+        assert_eq!(moved.len(), before.len());
+        assert!(
+            if down {
+                moved[i].y < before[i].y
+            } else {
+                moved[i].y > before[i].y
+            },
+            "point {i} did not move: {:?} -> {:?}",
+            before[i],
+            moved[i]
+        );
+        assert!((moved[i].x - before[i].x).abs() <= (8192.0 / fw) as i32 + 1);
+        assert_eq!(
+            gui.shared.sb.model.lock().state().shapers[k].bands[1].mix,
+            1.0,
+            "the point drag changed the band mix"
+        );
+        assert!(uploads > 0, "the frame was not repainted");
+        // Empty space a third of the way between two markers, near the top or bottom edge.
+        let a = marker(&moved, 0).x;
+        let b = moved
+            .get(1)
+            .map_or(section(w.x1, 0).x, |_| marker(&moved, 1).x);
+        let y = if marker(&moved, 0).y > section(0, (w.y0 + w.y1) / 2).y {
+            w.y0 + 8
+        } else {
+            w.y1 - 8
+        };
+        let empty = pos2(a + (b - a) / 3.0, section(0, y).y);
+        s.run(&mut gui, &host, vec![vec![]; 40]);
+        s.run(&mut gui, &host, double_click(empty));
+        let added = points(&gui);
+        assert_eq!(added.len(), moved.len() + 1, "no point added");
+        let new = added
+            .iter()
+            .position(|p| !moved.contains(p))
+            .expect("the new point");
+        s.run(&mut gui, &host, vec![vec![]; 40]);
+        s.run(&mut gui, &host, double_click(marker(&added, new)));
+        assert_eq!(points(&gui), moved, "the new point was not deleted");
     }
 
     /// A double-click on a rack cell turns that shaper off, and another turns it back on.
