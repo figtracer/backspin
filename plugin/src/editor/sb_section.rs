@@ -3,8 +3,8 @@
 //! preset, Clamp's toggle and combos). The painters are `backspin_ui::sb`; this module builds
 //! their model, handles input on the same rects and draws the live parts (knobs, meter).
 
-use super::Gui;
 use super::paint::knob;
+use super::{Gui, browser};
 use crate::params::{CLAMP_MODES, CLAMP_OVERSAMPLING, CLAMP_TYPES};
 use backspin_gfx::Rect as DRect;
 use backspin_presets::{Group, Preset};
@@ -15,7 +15,7 @@ use backspin_ui::{HEIGHT, SbModel, ShaperCell};
 use nih_plug::prelude::{FloatParam, IntParam, Param, ParamSetter};
 use nih_plug_egui::egui::{
     self, AboveOrBelow, Color32, Id, PointerButton, PopupCloseBehavior, Pos2, Rect, Response,
-    ScrollArea, Sense, Ui, pos2,
+    Sense, Ui, pos2,
 };
 use std::sync::atomic::Ordering;
 
@@ -177,7 +177,8 @@ fn list_popup(ui: &Ui, r: &Response, id: Id, items: &[&str], current: usize) -> 
     picked
 }
 
-fn load_sb(gui: &mut Gui, preset: &Preset) {
+/// Loads a shape preset and remembers it as the shown one.
+pub(super) fn load_sb(gui: &mut Gui, preset: &Preset) {
     if let Some(data) = preset.bytes()
         && gui.shared.sb.load(&data).is_ok()
     {
@@ -196,69 +197,17 @@ fn load_init(gui: &mut Gui, lib: &[Group]) {
     }
 }
 
-/// The shape preset: a two-column picker (groups, then the group's presets) above the combo,
-/// with previous and next stepping through the shown group.
+/// The shape preset: the combo opens the preset browser on the shape presets, and previous and
+/// next step through the shown pack.
 fn presets(gui: &mut Gui, ui: &mut Ui) {
-    let lib = gui.sb_library.lock().clone().unwrap_or_default();
     let r = ui.interact(at(layout::PRESET), Id::new("sb_preset"), Sense::click());
     if r.hovered() {
-        gui.hint = "Shape preset".into();
+        gui.hint = "Shape preset: click to browse".into();
     }
-    let group = gui.sb_pack.min(lib.len().saturating_sub(1));
-    let shown = lib.get(group).and_then(|g| {
-        g.presets
-            .iter()
-            .position(|p| Some(&p.source) == gui.sb_preset.as_ref())
-    });
-    let mut pick: Option<(usize, usize)> = None;
-    let mut show_group = None;
-    popup_above(ui, &r, Id::new("sb_preset_popup"), |ui| {
-        // Two columns side by side; each lists its items top to bottom (a list directly inside
-        // the horizontal row would inherit its left-to-right layout).
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(200.0);
-                ScrollArea::vertical()
-                    .id_salt("sb_groups")
-                    .max_height(400.0)
-                    .show(ui, |ui| {
-                        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
-                            for (g, grp) in lib.iter().enumerate() {
-                                let label = format!(
-                                    "{}  ({})",
-                                    grp.name.replace('@', " \u{203a} "),
-                                    grp.presets.len()
-                                );
-                                if ui.selectable_label(g == group, label).clicked() {
-                                    show_group = Some(g);
-                                }
-                            }
-                        });
-                    });
-            });
-            ui.separator();
-            ui.vertical(|ui| {
-                ui.set_width(230.0);
-                ScrollArea::vertical()
-                    .id_salt("sb_group_presets")
-                    .max_height(400.0)
-                    .show(ui, |ui| {
-                        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
-                            if let Some(grp) = lib.get(group) {
-                                for (i, p) in grp.presets.iter().enumerate() {
-                                    if ui.selectable_label(Some(i) == shown, &p.name).clicked() {
-                                        pick = Some((group, i));
-                                    }
-                                }
-                            }
-                        });
-                    });
-            });
-        });
-    });
-    if let Some(g) = show_group {
-        gui.sb_pack = g;
+    if r.clicked() {
+        gui.browser.toggle(browser::Kind::Shape);
     }
+    let mut pick = None;
     for (rect, step, id) in [(layout::PREV, -1, "sb_prev"), (layout::NEXT, 1, "sb_next")] {
         let r = ui.interact(at(rect), Id::new(id), Sense::click());
         if r.hovered() {
@@ -269,21 +218,25 @@ fn presets(gui: &mut Gui, ui: &mut Ui) {
             }
             .into();
         }
-        if r.clicked()
-            && let Some(grp) = lib.get(group)
-            && !grp.presets.is_empty()
-        {
-            let n = grp.presets.len() as i32;
-            pick = Some((
-                group,
-                shown.map_or(0, |c| (c as i32 + step).rem_euclid(n)) as usize,
-            ));
+        if r.clicked() {
+            let lib = gui.sb_library.lock();
+            if let Some(grp) = lib
+                .as_ref()
+                .and_then(|l| l.get(gui.sb_pack.min(l.len().saturating_sub(1))))
+                && !grp.presets.is_empty()
+            {
+                let shown = grp
+                    .presets
+                    .iter()
+                    .position(|p| Some(&p.source) == gui.sb_preset.as_ref());
+                let n = grp.presets.len() as i32;
+                let i = shown.map_or(0, |c| (c as i32 + step).rem_euclid(n)) as usize;
+                pick = Some(grp.presets[i].clone());
+            }
         }
     }
-    if let Some((g, i)) = pick {
-        ui.memory_mut(|m| m.close_popup());
-        let preset = lib[g].presets[i].clone();
-        load_sb(gui, &preset);
+    if let Some(p) = pick {
+        load_sb(gui, &p);
     }
 }
 

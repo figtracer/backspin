@@ -8,6 +8,7 @@
 use super::Gui;
 use super::menus::{load_fnv_bytes, load_preset_bytes};
 use backspin_engine::envelope::Envelope;
+use backspin_presets::{Preset, Source};
 use nih_plug::prelude::ParamSetter;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -133,17 +134,26 @@ pub(super) fn run(gui: &mut Gui, setter: &ParamSetter, action: Action, path: &Pa
         Action::GrossBeatPreset => {
             if let Ok(data) = std::fs::read(path) {
                 load_preset_bytes(gui, setter, &data);
-                gui.gb_preset = path
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                gui.gb_preset = Some(Preset {
+                    name: path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    source: Source::File(path.to_path_buf()),
+                });
             }
         }
-        Action::ShapePreset => {
-            let _ = gui.shared.sb.load_file(path);
-        }
+        Action::ShapePreset => match gui.shared.sb.load_file(path) {
+            Ok(()) => gui.sb_preset = Some(Source::File(path.to_path_buf())),
+            Err(e) if gui.browser.open.is_some() => gui.browser.error = Some(e),
+            Err(_) => {}
+        },
         Action::ImportFolder => {
-            let _ = backspin_presets::import_folder(path);
+            let imported = backspin_presets::import_folder(path);
+            gui.browser.show_folder(path);
+            if let Err(e) = imported {
+                gui.browser.error = Some(e.to_string());
+            }
         }
         Action::LoadEnvelope => load_fnv_bytes(gui, std::fs::read(path).ok().map(Into::into)),
         Action::SaveEnvelope(env) => {
