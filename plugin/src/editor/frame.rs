@@ -331,16 +331,11 @@ pub fn show(gui: &mut Gui, ui: &egui::Ui, cache: &mut FrameCache) {
     bars(gui, p);
 }
 
-/// Asks for a repaint about 30 times a second, for what moves while the host plays. The window
-/// runs a pass every frame but renders only on request, and a delayed request made in every pass
-/// would keep moving its deadline, so this asks at once on the first pass of each 1/30 s tick.
+/// Asks for a pass on the next frame, for what moves while the host plays or audio passes: the
+/// progress bars, the locator and the meter. Without a request the window runs a pass only for
+/// input and at a low idle rate, and it renders a pass only when its output changed.
 pub fn repaint_while_playing(ctx: &egui::Context) {
-    let id = egui::Id::new("backspin_playing_tick");
-    let tick = (ctx.input(|i| i.time) * 30.0) as u64;
-    if ctx.data(|d| d.get_temp::<u64>(id)) != Some(tick) {
-        ctx.data_mut(|d| d.insert_temp(id, tick));
-        ctx.request_repaint();
-    }
+    ctx.request_repaint();
 }
 
 /// The progress bars of the playing slots: four beats over the cell width (FUN_00066a30 keeps it

@@ -622,6 +622,10 @@ fn clamp(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
         f32::from_bits(meter[1].load(Ordering::Relaxed)),
         f32::from_bits(meter[0].load(Ordering::Relaxed)),
     ];
+    // The meter moves while audio passes.
+    if on && levels.iter().any(|&l| l > 0.0) {
+        super::frame::repaint_while_playing(ui.ctx());
+    }
     for (r, level) in [layout::METER_IN, layout::METER_OUT]
         .into_iter()
         .zip(levels)

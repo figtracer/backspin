@@ -1,15 +1,30 @@
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use baseview::{
     Event, EventStatus, PhySize, Window, WindowHandle, WindowHandler, WindowOpenOptions,
     WindowScalePolicy,
 };
 use copypasta::ClipboardProvider;
+use egui::epaint::ClippedShape;
 use egui::{pos2, vec2, Pos2, Rect, Rgba, ViewportCommand};
 use keyboard_types::{KeyboardEvent, Modifiers};
 use raw_window_handle::HasRawWindowHandle;
 
 use crate::{renderer::Renderer, GraphicsConfig};
+
+/// Without input, a repaint request or a deadline, a pass still runs this often, so the
+/// application notices state it is not told about (a transport that started, a meter that moved).
+const IDLE_PASS_INTERVAL: Duration = Duration::from_millis(50);
+
+/// The window renders at least this often, so a surface the host mapped or showed again gets its
+/// contents back without waiting for a change.
+const SAFETY_RENDER_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Every frame runs a pass and renders for this long after the window opens: hosts open the
+/// editor while the window is still unmapped, and a render into an unmapped surface is lost.
+const WARM_UP: Duration = Duration::from_secs(1);
 
 pub struct Queue<'a> {
     bg_color: &'a mut Rgba,
@@ -99,7 +114,17 @@ where
     points_per_pixel: f32,
     bg_color: Rgba,
     close_requested: bool,
+    /// When egui asked for the next pass (a repaint request with a delay).
     repaint_after: Option<Instant>,
+    /// Set by egui's repaint callback for a request without a delay, from inside a pass or from
+    /// another thread between passes.
+    wake: Arc<AtomicBool>,
+    last_pass: Option<Instant>,
+    /// The shapes of the last render: a pass that draws the same shapes does not render again.
+    last_shapes: Vec<ClippedShape>,
+    last_render: Option<Instant>,
+    /// The next pass renders whatever it draws: after a resize or a focus change.
+    render_forced: bool,
 }
 
 impl<State, U> EguiWindow<State, U>
@@ -126,6 +151,15 @@ where
             panic!("gpu backend failed to initialize: \n {err}")
         });
         let egui_ctx = egui::Context::default();
+        let wake = Arc::new(AtomicBool::new(false));
+        egui_ctx.set_request_repaint_callback({
+            let wake = wake.clone();
+            move |info| {
+                if info.delay.is_zero() {
+                    wake.store(true, Ordering::Relaxed);
+                }
+            }
+        });
 
         // Assume scale for now until there is an event with a new one.
         let pixels_per_point = match open_settings.scale_policy {
@@ -200,7 +234,12 @@ where
             scale_policy: open_settings.scale_policy,
             bg_color,
             close_requested,
-            repaint_after: Some(start_time),
+            repaint_after: None,
+            wake,
+            last_pass: None,
+            last_shapes: Vec::new(),
+            last_render: None,
+            render_forced: true,
         }
     }
 
@@ -292,6 +331,22 @@ where
             return;
         };
 
+        // A pass runs for input, when egui asked for one, during the warm-up and at the idle
+        // rate.
+        let now = Instant::now();
+        let warming_up = now.duration_since(self.start_time) < WARM_UP;
+        let due = !self.egui_input.events.is_empty()
+            || self.wake.swap(false, Ordering::Relaxed)
+            || self.repaint_after.is_some_and(|t| now >= t)
+            || warming_up
+            || self
+                .last_pass
+                .is_none_or(|t| now.duration_since(t) >= IDLE_PASS_INTERVAL);
+        if !due {
+            return;
+        }
+        self.last_pass = Some(now);
+
         self.egui_input.time = Some(self.start_time.elapsed().as_secs_f64());
         self.egui_input.screen_rect = Some(calculate_screen_rect(
             self.physical_size,
@@ -336,14 +391,21 @@ where
             }
         }
 
-        let now = Instant::now();
-        let do_repaint_now = if let Some(t) = self.repaint_after {
-            now >= t || viewport_output.repaint_delay.is_zero()
-        } else {
-            viewport_output.repaint_delay.is_zero()
-        };
+        // egui asks for the next pass after at most `repaint_delay` (`None` when it asks for
+        // none). A request without a delay reaches `wake` through the callback.
+        self.repaint_after = now.checked_add(viewport_output.repaint_delay);
 
-        if do_repaint_now {
+        // Render when the pass drew something else than the last render shows or changed a
+        // texture, and whatever it drew when forced, during the warm-up and at the safety rate.
+        let changed =
+            full_output.shapes != self.last_shapes || !full_output.textures_delta.is_empty();
+        let forced = self.render_forced
+            || warming_up
+            || self
+                .last_render
+                .is_none_or(|t| now.duration_since(t) >= SAFETY_RENDER_INTERVAL);
+        if changed || forced {
+            self.last_shapes = full_output.shapes.clone();
             self.renderer.render(
                 #[cfg(feature = "opengl")]
                 window,
@@ -353,11 +415,8 @@ where
                 &mut self.egui_ctx,
                 &mut full_output,
             );
-
-            self.repaint_after = None;
-        } else if let Some(repaint_after) = now.checked_add(viewport_output.repaint_delay) {
-            // Schedule to repaint after the requested time has elapsed.
-            self.repaint_after = Some(repaint_after);
+            self.render_forced = false;
+            self.last_render = Some(now);
         }
 
         for command in full_output.platform_output.commands {
@@ -545,10 +604,13 @@ where
                     viewport_info.native_pixels_per_point = Some(self.pixels_per_point);
                     viewport_info.inner_rect = Some(screen_rect);
 
-                    // Schedule to repaint on the next frame.
+                    // The surface changed: render on the next frame.
                     self.repaint_after = Some(Instant::now());
+                    self.render_forced = true;
                 }
                 baseview::WindowEvent::Focused => {
+                    // The host may have shown the window again: render on the next frame.
+                    self.render_forced = true;
                     self.egui_input
                         .events
                         .push(egui::Event::WindowFocused(true));

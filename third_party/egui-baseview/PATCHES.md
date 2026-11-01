@@ -10,6 +10,14 @@ only: no examples, CI files or screenshot), with these changes:
   typed their letter into text fields. A letter pressed with the command key (or Control) is never
   an `Event::Text`, a paste is an `Event::Paste`, and letters translate to egui keys in both cases
   (Cmd+Shift+Z is `Key::Z`).
+- **Render on change.** The window renders a pass only when its shapes or textures differ from
+  the last render, after a resize or focus change, every frame during the first second (hosts open
+  the editor while the window is still unmapped), and at least every 500 ms. Before, it rendered
+  whenever egui asked for a repaint, and `nih_plug_egui` asked on every frame.
+- **Idle passes.** A pass runs when input arrived, when egui asked for one (a request without a
+  delay sets a wake flag through egui's repaint callback, one with a delay sets a deadline), and
+  otherwise every 50 ms, so the application still notices state it is not told about. Before,
+  every frame ran a pass.
 - **Lints off.** `[lints]` tables allow the crate's warnings; they are upstream's.
 
 The root `Cargo.toml` patches the git source to this directory.
