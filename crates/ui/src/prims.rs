@@ -604,7 +604,11 @@ fn aa_line_fixed(dib: &mut Dib, px0: i64, py0: i64, px1: i64, py1: i64, colour: 
 
 /// Profile table 1 of `DAT_003b7dc8`: `Round((i/256)^(5/6) * 256)`.
 fn profile(i: usize) -> i32 {
-    rne((i as f64 / 256.0).powf(5.0 / 6.0) * 256.0)
+    // A table: the glow columns call this for every pixel.
+    static TABLE: std::sync::LazyLock<[i32; 257]> = std::sync::LazyLock::new(|| {
+        std::array::from_fn(|i| rne((i as f64 / 256.0).powf(5.0 / 6.0) * 256.0))
+    });
+    TABLE[i]
 }
 
 /// `FUN_001777d0(y0, y1, y2, y3, dib, x, colour, table 1, alpha)` in blend mode 1: one pixel
