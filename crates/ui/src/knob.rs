@@ -96,6 +96,37 @@ pub(crate) const VOL_TNS: Knob = Knob {
     lo: -256,
     hi: 256,
 };
+/// Backspin addition: the shape section's mix knob, the Mix knob with `fill` (at
+/// `sb::layout::KNOB`, in control coordinates; it takes its value directly).
+pub(crate) const fn mix_knob(fill: u32) -> Knob {
+    Knob {
+        x: 0,
+        y: 0,
+        size: 48,
+        angles: MIX,
+        centered: false,
+        fill,
+        param: 0,
+        lo: 0,
+        hi: 1,
+    }
+}
+
+/// Backspin addition: a small knob (the ATT, REL and TNS angles) in control coordinates of a
+/// `size` square, taking its value directly; `centered` fills from the middle.
+pub(crate) const fn small_knob(size: i32, centered: bool, fill: u32) -> Knob {
+    Knob {
+        x: 0,
+        y: 0,
+        size,
+        angles: SMALL,
+        centered,
+        fill,
+        param: 0,
+        lo: 0,
+        hi: 1,
+    }
+}
 
 /// `thunk_FUN_00006b78(B*0x1d2f + G*0x9646 + R*0x4c8b, factor, 0x1000000)`: the luma weighted
 /// delta (truncated toward zero).

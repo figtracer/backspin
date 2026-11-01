@@ -107,19 +107,37 @@ impl View {
 
 /// The values of an envelope at every pixel column (the non-looping stepper from 0).
 fn columns(env: &Envelope, v: &View) -> Vec<Pos2> {
+    // Four samples per column; each column draws its lowest and highest value (in the order
+    // they come), so spikes narrower than a pixel keep their height.
+    const SUB: usize = 4;
     let n = v.r.width().round().max(2.0) as usize;
-    let step = v.len / (n - 1) as f64;
+    let step = v.len / ((n - 1) * SUB) as f64;
     let mut c = Cursor::new(env);
     c.step_once(env, 0.0);
-    let mut out = Vec::with_capacity(n);
+    let mut out = Vec::with_capacity(n * 2);
     for i in 0..n {
+        let x = v.r.min.x + i as f32 * v.r.width() / (n - 1) as f32;
+        let (mut lo, mut hi) = ((c.out, 0), (c.out, 0));
         if i > 0 {
-            c.step_once(env, step);
+            for k in 1..=SUB {
+                c.step_once(env, step);
+                if c.out < lo.0 {
+                    lo = (c.out, k);
+                }
+                if c.out > hi.0 {
+                    hi = (c.out, k);
+                }
+            }
         }
-        out.push(pos2(
-            v.r.min.x + i as f32 * v.r.width() / (n - 1) as f32,
-            v.y(c.out),
-        ));
+        let (a, b) = if lo.1 <= hi.1 {
+            (lo.0, hi.0)
+        } else {
+            (hi.0, lo.0)
+        };
+        out.push(pos2(x, v.y(a)));
+        if b != a {
+            out.push(pos2(x, v.y(b)));
+        }
     }
     out
 }

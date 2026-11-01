@@ -1024,6 +1024,19 @@ mod snapshots {
         render("stutter_compact", gui_with(Some("Stutter")), |g| {
             g.compact = true
         });
+        // The shape section with a preset: some shapers on, one turned off, one hidden.
+        if let Some(g) = gui_with_shape_named(Some("Patterns"), "16th Rhythm") {
+            render("shape_section", g, |g| {
+                g.shared.model.lock().view_bank = 0;
+                g.edited = [14, 30];
+            });
+        }
+        if let Some(g) = gui_with_shape_named(Some("Patterns"), "16th Rhythm") {
+            render("shape_off", g, |g| {
+                g.shared.sb.set_enabled(false);
+                g.edited = [14, 30];
+            });
+        }
         // Volume steps between 0 and 100 %: vertical jumps and lines on the top and bottom edges.
         render("patterns_copter", gui_with(Some("Patterns")), |g| {
             g.shared.model.lock().view_bank = 1;
@@ -1331,6 +1344,28 @@ mod snapshots {
 
     /// Loads the first library preset whose shaper `k`'s middle band has an LFO into the shape
     /// section, and selects that shaper.
+    /// The editor with Gross Beat preset `gb` and the library's shape preset `name` loaded.
+    fn gui_with_shape_named(gb: Option<&str>, name: &str) -> Option<Gui> {
+        let lib = crate::sb::library();
+        let all = lib.first()?;
+        let mut gui = gui_with(gb);
+        let (i, p) = all
+            .presets
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p.name == name)?;
+        gui.shared.sb.load(&p.bytes()?).ok()?;
+        gui.sb_preset = Some(p.source.clone());
+        gui.sb_pack = 0;
+        let _ = i;
+        *gui.sb_library.lock() = Some(lib.clone());
+        gui.sb_loading = true;
+        let st = gui.shared.sb.model.lock().state();
+        let k = (0..16).find(|&k| st.shapers[k].visible && st.shapers[k].on)?;
+        gui.select_shaper(k);
+        Some(gui)
+    }
+
     fn gui_with_shape() -> Option<(Gui, usize)> {
         let lib = crate::sb::library();
         let all = lib.first()?;
@@ -1394,13 +1429,17 @@ mod snapshots {
         };
         let before = points(&gui);
         let w = backspin_ui::sb::layout::WAVE;
-        let (fw, fh) = ((w.x1 - w.x0 - 1) as f32, (w.y1 - w.y0 - 1) as f32);
+        let pad = backspin_ui::sb::WAVE_PAD;
+        let (fw, fh) = (
+            (w.x1 - w.x0 - 1) as f32,
+            (w.y1 - w.y0 - 1) as f32 - 2.0 * pad,
+        );
         // Where the painter draws point `i`'s marker: on the curve.
         let marker = |pts: &[Point], i: usize| {
             let table = render_table(pts);
             let px = pts[i].x as f32 / 8192.0;
             let v = table[((px * table.len() as f32) as usize).min(table.len() - 1)];
-            section(w.x0, w.y0) + vec2(px * fw, fh * (1.0 - (v + 1.0) * 0.5))
+            section(w.x0, w.y0) + vec2(px * fw, pad + fh * (1.0 - (v + 1.0) * 0.5))
         };
         // A point whose marker is clear of the others.
         let Some(i) = (0..before.len()).find(|&i| {
@@ -1457,6 +1496,88 @@ mod snapshots {
         s.run(&mut gui, &host, vec![vec![]; 40]);
         s.run(&mut gui, &host, double_click(marker(&added, new)));
         assert_eq!(points(&gui), moved, "the new point was not deleted");
+    }
+
+    /// Every shaper: a click on its rack cell selects it, the power button turns it on and off,
+    /// and the rack and the processors follow.
+    #[test]
+    fn every_shaper_power_button_toggles() {
+        let Some((mut gui, _)) = gui_with_shape() else {
+            return;
+        };
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        s.run(&mut gui, &host, vec![vec![]]);
+        let r = backspin_ui::sb::layout::RACK;
+        let (cw, ch) = ((r.x1 - r.x0) / 4, (r.y1 - r.y0) / 4);
+        let p = backspin_ui::sb::layout::SHAPER_ON;
+        let power = section((p.x0 + p.x1) / 2, (p.y0 + p.y1) / 2);
+        let click = |at: Pos2| {
+            let mut f = vec![
+                vec![egui::Event::PointerMoved(at)],
+                vec![button(at, true)],
+                vec![button(at, false)],
+            ];
+            // A pause, so the next click is not a double click.
+            f.extend(std::iter::repeat_n(vec![], 30));
+            f
+        };
+        let on = |g: &Gui, k: usize| {
+            let st = g.shared.sb.model.lock().state();
+            st.shapers[k].visible && st.shapers[k].on
+        };
+        for k in 0..16 {
+            let cell = section(
+                r.x0 + (k as i32 % 4) * cw + cw / 2,
+                r.y0 + (k as i32 / 4) * ch + ch / 2,
+            );
+            s.run(&mut gui, &host, click(cell));
+            assert_eq!(gui.sb_selected, k, "cell {k} did not select its shaper");
+            let before = on(&gui, k);
+            gui.shared.sb.latency_dirty.store(false, Ordering::Relaxed);
+            s.run(&mut gui, &host, click(power));
+            assert_eq!(on(&gui, k), !before, "power did not toggle shaper {k}");
+            assert!(
+                gui.shared.sb.latency_dirty.load(Ordering::Relaxed),
+                "shaper {k}: processors not rebuilt"
+            );
+            assert_eq!(gui.sb_selected, k, "power changed the selection");
+            s.run(&mut gui, &host, click(power));
+            assert_eq!(on(&gui, k), before, "power did not toggle shaper {k} back");
+        }
+    }
+
+    /// The "shape" pill turns the whole section off and on, and the mix knob still drags at
+    /// its right edge, where the pill starts.
+    #[test]
+    fn shape_pill_toggles_the_section() {
+        let Some((mut gui, _)) = gui_with_shape() else {
+            return;
+        };
+        let host = RecordingHost::default();
+        let mut s = Session::new(&mut gui);
+        s.run(&mut gui, &host, vec![vec![]]);
+        let p = backspin_ui::sb::layout::PILL;
+        let pill = section((p.x0 + p.x1) / 2 + 10, (p.y0 + p.y1) / 2);
+        let enabled = |g: &Gui| g.shared.sb.model.lock().enabled;
+        assert!(enabled(&gui));
+        let mut click = vec![
+            vec![egui::Event::PointerMoved(pill)],
+            vec![button(pill, true)],
+            vec![button(pill, false)],
+        ];
+        click.extend(std::iter::repeat_n(vec![], 30));
+        let uploads = s.run(&mut gui, &host, click.clone());
+        assert!(!enabled(&gui), "the pill did not turn the section off");
+        assert!(uploads > 0, "the frame was not repainted");
+        s.run(&mut gui, &host, click);
+        assert!(enabled(&gui), "the pill did not turn the section back on");
+        let k = backspin_ui::sb::layout::KNOB;
+        let edge = section(k.x1 - 4, (k.y0 + k.y1) / 2);
+        s.run(&mut gui, &host, drag(edge, edge + vec2(0.0, 80.0), 6));
+        let mix = gui.shared.sb.model.lock().state().master_mix;
+        assert!(mix < 0.9, "the knob edge did not drag the mix: {mix}");
+        assert!(enabled(&gui), "the knob drag toggled the section");
     }
 
     /// A double-click on a rack cell turns that shaper off, and another turns it back on.

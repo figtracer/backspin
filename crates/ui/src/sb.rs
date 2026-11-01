@@ -5,7 +5,9 @@
 //! holds an envelope-style view and a bottom row of tabs and combos, like the envelope and the
 //! HOLD / TRIG SYNC / POS SYNC row. Knobs and the level meter are drawn live by the editor.
 
+use crate::knob::{mix_knob, paint_knob, small_knob};
 use crate::painters::{TOGGLE, bottom_tab, combo_at, control, h_button, rect, side_tab, v_button};
+use crate::prims::{darken, disc};
 use crate::{Font, PANEL, Text};
 use backspin_gfx::dib::lighten;
 use backspin_gfx::{Dib, DrawPath, PI, Rect, gradient_lut};
@@ -15,6 +17,10 @@ pub const SB_HEIGHT: i32 = 205;
 /// The section's group colour (beside time's green and volume's orange) and its fill variant.
 pub const ACCENT: u32 = 0x7fd6ff;
 pub const ACCENT_FILL: u32 = 0x6cc4ef;
+/// The wave view's inset above +1 and below -1, so lines at the extremes stay off the border.
+pub const WAVE_PAD: f32 = 4.0;
+/// The accent of a control whose section is off.
+const DIM_ACCENT: u32 = 0x4f7d93;
 
 /// Glyph code points of the section (private use; the text renderer maps them).
 pub const GLYPH_WAVE: &str = "\u{e000}";
@@ -76,6 +82,8 @@ pub struct ShaperCell {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SbModel {
     pub enabled: bool,
+    /// The master mix, 0..1.
+    pub mix: f32,
     pub preset: String,
     pub shapers: Vec<ShaperCell>,
     pub selected: usize,
@@ -90,6 +98,8 @@ pub struct SbModel {
     pub readout: String,
     /// Clamp: on, and the TYPE, MODE and OVERSAMPLING values.
     pub clamp_on: bool,
+    /// Clamp's IN, OUT, CEIL and SOFT knobs, normalized.
+    pub clamp_knobs: [f32; 4],
     pub clamp_type: String,
     pub clamp_mode: String,
     pub clamp_oversampling: String,
@@ -130,14 +140,42 @@ fn shape_bar(dib: &mut Dib, m: &SbModel, text: &mut dyn Text) {
     a.line_to(x0, y0 + 1.0);
     a.draw_path(DrawPath::Fill);
     let r = Rect::new(p.x0, p.y0, 124, p.y1 - 1);
-    let colour = if m.enabled { ACCENT } else { 0x8595a0 };
+    // The caption keeps the section colour, dimmed while the section is off, as the time and
+    // volume captions keep theirs.
+    let colour = if m.enabled { ACCENT } else { DIM_ACCENT };
     text.draw(dib, Font::Caption, "shape", r, 0x1a, colour, 0x100);
-    text.draw(dib, Font::IlGlyphs, GLYPH_WAVE, r, 0x19, colour, 0x100);
+    wave_icon(dib, (p.y0 + p.y1) as f64 * 0.5, colour);
+}
+
+/// The pill's icon: a filled wave tile, drawn like the volume pill's filled ramp.
+fn wave_icon(dib: &mut Dib, cy: f64, colour: u32) {
+    let (x0, x1) = (108.0, 124.0);
+    let (base, amp) = (cy + 6.0, 4.5);
+    let a = dib.agg();
+    a.reset_path();
+    a.fill_color(agg_colour(colour, 0xff));
+    a.move_to(x0, base);
+    for i in 0..=32 {
+        let t = i as f64 / 32.0;
+        a.line_to(x0 + t * (x1 - x0), cy - 0.5 - amp * (t * 2.0 * PI).sin());
+    }
+    a.line_to(x1, base - 2.0);
+    a.arc_to(2.0, 2.0, 0.0, false, true, x1 - 2.0, base);
+    a.close_polygon();
+    a.draw_path(DrawPath::Fill);
 }
 
 /// The captions of Clamp's knobs and the meter's frame (the knobs and bars are live).
 fn clamp_row(dib: &mut Dib, m: &SbModel, text: &mut dyn Text) {
     let colour = if m.clamp_on { 0xb9c5c4 } else { 0x5d6b74 };
+    // The knobs as the form's small knobs: the gains fill from 0 dB in the middle.
+    let fill = if m.clamp_on { 0xefc46c } else { 0x746b5d };
+    for (i, r) in layout::CLAMP_KNOBS.iter().enumerate() {
+        let k = small_knob(r.x1 - r.x0, i < 2, fill);
+        control(dib, *r, |d, _, _| {
+            paint_knob(d, &k, m.clamp_knobs[i] as f64)
+        });
+    }
     for (r, label) in layout::CLAMP_KNOBS
         .iter()
         .zip(["IN", "OUT", "CEIL", "SOFT"])
@@ -199,7 +237,8 @@ fn rack(dib: &mut Dib, w: i32, h: i32, m: &SbModel, text: &mut dyn Text) {
     for (i, s) in m.shapers.iter().enumerate() {
         let (col, row) = (i as i32 % layout::COLS, i as i32 / layout::COLS);
         let r = Rect::new(col * cw, row * ch, col * cw + cw - 1, row * ch + ch - 1);
-        let active = m.enabled && s.visible && s.on;
+        let on = s.visible && s.on;
+        let active = m.enabled && on;
         dib.multiply_rect(r, if s.visible { 1.8 } else { 1.25 });
         if active {
             dib.fill_rect(Rect::new(r.x0, r.y1 - 3, r.x1, r.y1), ACCENT_FILL, 0x78);
@@ -207,16 +246,21 @@ fn rack(dib: &mut Dib, w: i32, h: i32, m: &SbModel, text: &mut dyn Text) {
         if i == m.selected {
             dib.frame_rect(r, ACCENT_FILL, 0x50, 1);
         }
-        let colour = if i == m.selected {
-            lighten(ACCENT, 0x18) & 0xffffff
-        } else if active && s.ported {
+        // On is blue (dim while the section is off), off is grey, hidden is dark: an off shaper
+        // must never look brighter than an on one.
+        let colour = if active {
             ACCENT
-        } else if active {
-            0x8595a0
+        } else if on {
+            DIM_ACCENT
         } else if s.visible {
-            0xd0dfea
+            0x8595a0
         } else {
             0x485762
+        };
+        let colour = if i == m.selected {
+            lighten(colour, 0x18) & 0xffffff
+        } else {
+            colour
         };
         let tr = Rect::new(r.x0 + 3, r.y0 + 1, r.x1 - 2, r.y1);
         text.draw(dib, Font::SlotCell, &s.name, tr, 0x205a, colour, 0x110);
@@ -260,8 +304,19 @@ fn wave(dib: &mut Dib, w: i32, h: i32, m: &SbModel, text: &mut dyn Text) {
         let y = k * (h - 1) / 4;
         dib.fill_rect(Rect::new(0, y, w, y + 1), 0x2d414f, 0x100);
     }
+    // Where the form's envelope shows its watermark, under the curve.
+    text.draw(
+        dib,
+        Font::Caption,
+        &m.readout,
+        Rect::new(8, h - 24, w - 10, h - 4),
+        0x19,
+        0x5d7383,
+        0x100,
+    );
     let (fw, fh) = ((w - 1) as f64, (h - 1) as f64);
-    let ys = |v: f32| fh * (1.0 - (v as f64 + 1.0) * 0.5);
+    let pad = WAVE_PAD as f64;
+    let ys = |v: f32| pad + (fh - 2.0 * pad) * (1.0 - (v as f64 + 1.0) * 0.5);
     if !m.table.is_empty() {
         let n = m.table.len();
         let at = |x: i32| m.table[(x as usize * n / w as usize).min(n - 1)];
@@ -286,24 +341,16 @@ fn wave(dib: &mut Dib, w: i32, h: i32, m: &SbModel, text: &mut dyn Text) {
         a.draw_path(DrawPath::Stroke);
         // Soft points (knot multiplicity 1) are control points the curve passes near, not
         // through; each marker sits on the curve at its point's position, where the wave is.
+        // The markers are the envelope's point discs.
+        let pc = lighten(colour, 0x20) & 0xffffff;
         for &(px, _) in &m.points {
             let i = ((px * n as f32) as usize).min(n - 1);
-            let (cx, cy) = ((px as f64 * fw) as i32, ys(m.table[i]) as i32);
-            dib.fill_rect(Rect::new(cx - 2, cy - 2, cx + 3, cy + 3), 0xff171f24, 0x100);
-            dib.frame_rect(Rect::new(cx - 2, cy - 2, cx + 3, cy + 3), colour, 0x100, 1);
+            let (cx, cy) = ((px as f64 * fw).round() as f32, ys(m.table[i]) as f32);
+            disc(dib, cx, cy, 0.0, 3.65, 1.0, darken(pc, 0x20));
+            disc(dib, cx, cy, 0.0, 2.65, 1.0, pc);
         }
     }
     dib.frame_rect(Rect::new(0, 0, w, h), 0x171f24, 0x100, 1);
-    // Where the form's envelope shows its watermark.
-    text.draw(
-        dib,
-        Font::Caption,
-        &m.readout,
-        Rect::new(8, h - 24, w - 10, h - 4),
-        0x19,
-        0x5d7383,
-        0x100,
-    );
 }
 
 /// Paints the section; `dib`'s origin is the section's top-left corner.
@@ -314,6 +361,10 @@ pub fn paint_sb(dib: &mut Dib, m: &SbModel, text: &mut dyn Text) {
     control(dib, layout::RACK, |d, w, h| rack(d, w, h, m, text));
     clamp_row(dib, m, text);
     shape_bar(dib, m, text);
+    let fill = if m.enabled { 0xefc46c } else { 0x937d4f };
+    control(dib, layout::KNOB, |d, _, _| {
+        paint_knob(d, &mix_knob(fill), m.mix as f64)
+    });
     control(dib, layout::BANDS, |d, w, _| bands(d, w, m, text));
     let on = m.shapers.get(m.selected).is_some_and(|s| s.visible && s.on);
     control(dib, layout::SHAPER_ON, |d, w, h| {

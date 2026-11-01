@@ -33,8 +33,6 @@ pub const PANEL: Color32 = rgb(0x344b5b);
 pub const TIME: Color32 = rgb(0xa8ff70);
 pub const VOLUME: Color32 = rgb(0xffb870);
 pub const TIME_MIX: Color32 = rgb(0x86bf69);
-pub const KNOB_RAIL: Color32 = rgb(0x3f484d);
-pub const KNOB_PRESSED: Color32 = rgb(0xced0d1);
 pub const SELECT_RING: Color32 = rgb(0xa8e44a);
 
 /// The colour of a group (bank): time green, volume orange.
@@ -221,50 +219,4 @@ pub fn glyph(p: &Painter, r: Rect, g: Glyph, c: Color32) {
             p.line_segment([ctr + vec2(0.0, -0.65 * w), ctr + vec2(0.0, -0.1 * w)], s);
         }
     }
-}
-
-/// A TVectorWheel knob. `t` is the normalized value (0..1), `centered` draws from the middle.
-/// `gap_right` puts the rail gap at the right (the mix knobs), else at the bottom.
-pub fn knob(
-    p: &Painter,
-    r: Rect,
-    t: f32,
-    fill: Color32,
-    centered: bool,
-    gap_right: bool,
-    pressed: bool,
-) {
-    let c = r.center();
-    let rad = r.width().min(r.height()) * 0.5 - 2.0;
-    // Angles in screen space, clockwise from the right. The rail spans 270 degrees.
-    let (a0, a1) = if gap_right {
-        (PI * 0.25, PI * 1.75)
-    } else {
-        (PI * 0.75, PI * 2.25)
-    };
-    let arc = |from: f32, to: f32| -> Vec<Pos2> {
-        let n = 48;
-        (0..=n)
-            .map(|i| {
-                let a = from + (to - from) * i as f32 / n as f32;
-                c + vec2(a.cos(), a.sin()) * rad
-            })
-            .collect()
-    };
-    p.add(Shape::line(arc(a0, a1), Stroke::new(4.0f32, KNOB_RAIL)));
-    let col = if pressed { KNOB_PRESSED } else { fill };
-    let at = a0 + (a1 - a0) * t.clamp(0.0, 1.0);
-    let from = if centered { (a0 + a1) * 0.5 } else { a0 };
-    if (at - from).abs() > 1e-3 {
-        p.add(Shape::line(
-            arc(from.min(at), from.max(at)),
-            Stroke::new(4.0f32, col),
-        ));
-    }
-    p.circle_filled(c, rad * 0.6, KNOB_RAIL);
-    let d = vec2(at.cos(), at.sin());
-    p.line_segment(
-        [c + d * rad * 0.15, c + d * rad * 0.55],
-        Stroke::new(2.0f32, lighten(KNOB_RAIL, 0x60)),
-    );
 }

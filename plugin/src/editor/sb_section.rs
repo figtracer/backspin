@@ -4,13 +4,12 @@
 //! their model, handles input on the same rects and draws the live parts (knobs, meter).
 
 use super::Gui;
-use super::paint::knob;
 use crate::params::{CLAMP_MODES, CLAMP_OVERSAMPLING, CLAMP_TYPES};
 use backspin_gfx::Rect as DRect;
 use backspin_presets::{Group, Preset};
 use backspin_shaperbox::state::State;
 use backspin_shaperbox::wave::{LENGTHS, Point, TABLE, rate_hz, render_table};
-use backspin_ui::sb::{ACCENT, layout};
+use backspin_ui::sb::{ACCENT, WAVE_PAD, layout};
 use backspin_ui::{HEIGHT, SbModel, ShaperCell};
 use nih_plug::prelude::{FloatParam, IntParam, Param, ParamSetter};
 use nih_plug_egui::egui::{
@@ -99,6 +98,8 @@ pub fn model(gui: &Gui) -> SbModel {
         band: gui.sb_band,
         bands_active: [false, true, false],
         clamp_on: c.on.value(),
+        clamp_knobs: [&c.input, &c.output, &c.ceiling, &c.shape]
+            .map(|p| p.unmodulated_normalized_value()),
         clamp_type: ["A", "B"][c.kind.value().clamp(0, 1) as usize].into(),
         clamp_mode: item(&CLAMP_MODES, c.mode.value()),
         clamp_oversampling: item(&CLAMP_OVERSAMPLING, c.oversampling.value()),
@@ -112,6 +113,7 @@ pub fn model(gui: &Gui) -> SbModel {
             ported: PORTED.contains(&k),
         })
         .collect();
+    out.mix = state.as_ref().map_or(1.0, |s| s.master_mix);
     let Some(s) = state else {
         return out;
     };
@@ -320,15 +322,7 @@ fn mix_knob(gui: &mut Gui, ui: &mut Ui) {
     if resp.hovered() {
         gui.hint = format!("Shape mix: {:.0}%", mix * 100.0);
     }
-    knob(
-        ui.painter(),
-        r,
-        mix,
-        colour(ACCENT),
-        false,
-        true,
-        gui.sb_mix_drag.is_some(),
-    );
+    // The frame paints the knob, like the time and volume Mix knobs.
 }
 
 /// The wave view. On a point: drag moves it (Ctrl finer in `y`), double-click deletes it and
@@ -352,7 +346,8 @@ fn wave_view(gui: &mut Gui, ui: &mut Ui) {
     };
     let Some((mix, points)) = band else { return };
     let r = resp.rect;
-    let (fw, fh) = (r.width() - 1.0, r.height() - 1.0);
+    // The painter's mapping: `y` runs from +1 at the top inset to -1 at the bottom inset.
+    let (fw, fh) = (r.width() - 1.0, r.height() - 1.0 - 2.0 * WAVE_PAD);
     // The point whose marker (drawn on the curve, as the painter does) is under `pos`.
     let hit = |pos: Pos2| {
         let points = points.as_deref()?;
@@ -364,7 +359,7 @@ fn wave_view(gui: &mut Gui, ui: &mut Ui) {
             .map(|(i, p)| {
                 let px = p.x as f32 / TABLE as f32;
                 let v = table.get(((px * n as f32) as usize).min(n - 1)).copied();
-                let y = fh * (1.0 - (v.unwrap_or(p.y) + 1.0) * 0.5);
+                let y = WAVE_PAD + fh * (1.0 - (v.unwrap_or(p.y) + 1.0) * 0.5);
                 (i, pos.distance(pos2(r.min.x + px * fw, r.min.y + y)))
             })
             .filter(|&(_, d)| d <= 6.0)
@@ -428,7 +423,7 @@ fn wave_view(gui: &mut Gui, ui: &mut Ui) {
                 None => {
                     let x = (((pos.x - r.min.x) / fw * TABLE as f32).round() as i32)
                         .clamp(0, TABLE as i32 - 1);
-                    let y = (1.0 - 2.0 * (pos.y - r.min.y) / fh).clamp(-1.0, 1.0);
+                    let y = (1.0 - 2.0 * (pos.y - r.min.y - WAVE_PAD) / fh).clamp(-1.0, 1.0);
                     let at = pts.partition_point(|p| p.x < x);
                     if pts.get(at).is_none_or(|p| p.x != x) {
                         // A corner point: the curve passes through where the click was.
@@ -559,7 +554,6 @@ fn param_knob(
     id: &str,
     hint: &str,
     step: f32,
-    on: bool,
 ) {
     let r = at(r);
     let resp = ui.interact(r, Id::new(id), Sense::click_and_drag());
@@ -590,10 +584,7 @@ fn param_knob(
         }
         gui.hint = format!("{hint}: {}", p.normalized_value_to_string(norm, true));
     }
-    let fill = if on { colour(ACCENT) } else { colour(0x5d6b74) };
-    // The gains are centred at 0 dB like the TNS knob; ceiling and softness fill from the left.
-    let centred = p.preview_normalized(0.0) > 0.0 && p.preview_normalized(0.0) < 1.0;
-    knob(ui.painter(), r, norm, fill, centred, false, resp.dragged());
+    // The frame paints the knob, like the form's small knobs.
 }
 
 /// A combo bound to an int parameter, with its items in a popup above it.
@@ -648,7 +639,7 @@ fn clamp(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
         (&c.shape, "clamp_shape", "Clamp softness (shape)", 0.05),
     ];
     for ((p, id, hint, step), r) in knobs.into_iter().zip(layout::CLAMP_KNOBS) {
-        param_knob(gui, ui, setter, p, r, id, hint, step, on);
+        param_knob(gui, ui, setter, p, r, id, hint, step);
     }
     let meter = &gui.shared.status.clamp_meter;
     let levels = [
@@ -727,6 +718,33 @@ fn clamp(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
     );
 }
 
+/// The "shape" pill turns the whole section on or off (its caption dims while it is off).
+fn pill(gui: &mut Gui, ui: &mut Ui) {
+    // The pill starts under the knob; the knob keeps its drags.
+    let mut r = at(layout::PILL);
+    r.min.x = at(layout::KNOB).max.x;
+    let resp = ui.interact(r, Id::new("sb_pill"), Sense::click());
+    let (enabled, loaded) = {
+        let m = gui.shared.sb.model.lock();
+        (m.enabled, m.tree.is_some())
+    };
+    if resp.hovered() {
+        gui.hint = format!(
+            "Shape: {}, click to turn {}",
+            ["off", "on"][enabled as usize],
+            ["on", "off"][enabled as usize]
+        );
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if resp.clicked() {
+        if !loaded {
+            let lib = gui.sb_library.lock().clone().unwrap_or_default();
+            load_init(gui, &lib);
+        }
+        gui.shared.sb.set_enabled(!enabled || !loaded);
+    }
+}
+
 /// Input and live drawing for the whole section.
 pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
     ensure_library(gui);
@@ -734,5 +752,6 @@ pub fn show(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter) {
     rack(gui, ui);
     wave_view(gui, ui);
     mix_knob(gui, ui);
+    pill(gui, ui);
     clamp(gui, ui, setter);
 }
