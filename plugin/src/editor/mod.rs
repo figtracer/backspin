@@ -862,20 +862,36 @@ mod snapshots {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(w as f32, h as f32))),
             ..Default::default()
         };
-        let mut out = ctx.run(input(), |ctx| gui.frame(ctx, &setter));
-        for _ in 0..2 {
-            out = ctx.run(input(), |ctx| gui.frame(ctx, &setter));
-        }
-        let prims = ctx.tessellate(out.shapes, 1.0);
+        // Textures are uploaded in the frame that creates them, so keep every frame's uploads.
         let mut textures: std::collections::HashMap<egui::TextureId, (usize, usize, Vec<Color32>)> =
             Default::default();
-        for (id, delta) in &out.textures_delta.set {
-            let (tw, th, px): (usize, usize, Vec<Color32>) = match &delta.image {
-                egui::ImageData::Color(c) => (c.size[0], c.size[1], c.pixels.clone()),
-                egui::ImageData::Font(f) => (f.size[0], f.size[1], f.srgba_pixels(None).collect()),
-            };
-            textures.insert(*id, (tw, th, px));
+        let mut out = ctx.run(input(), |ctx| gui.frame(ctx, &setter));
+        for k in 0..3 {
+            for (id, delta) in &out.textures_delta.set {
+                let (tw, th, px): (usize, usize, Vec<Color32>) = match &delta.image {
+                    egui::ImageData::Color(c) => (c.size[0], c.size[1], c.pixels.clone()),
+                    egui::ImageData::Font(f) => {
+                        (f.size[0], f.size[1], f.srgba_pixels(None).collect())
+                    }
+                };
+                match (delta.pos, textures.get_mut(id)) {
+                    // A partial update of an existing texture.
+                    (Some([x, y]), Some((stw, _, spx))) => {
+                        for row in 0..th {
+                            let (d, s) = ((y + row) * *stw + x, row * tw);
+                            spx[d..d + tw].copy_from_slice(&px[s..s + tw]);
+                        }
+                    }
+                    _ => {
+                        textures.insert(*id, (tw, th, px));
+                    }
+                }
+            }
+            if k < 2 {
+                out = ctx.run(input(), |ctx| gui.frame(ctx, &setter));
+            }
         }
+        let prims = ctx.tessellate(out.shapes, 1.0);
         let mut img = vec![[0f32; 3]; w * h];
         for p in prims {
             let egui::epaint::Primitive::Mesh(mesh) = p.primitive else {
@@ -1007,6 +1023,11 @@ mod snapshots {
         });
         render("stutter_compact", gui_with(Some("Stutter")), |g| {
             g.compact = true
+        });
+        // Volume steps between 0 and 100 %: vertical jumps and lines on the top and bottom edges.
+        render("patterns_copter", gui_with(Some("Patterns")), |g| {
+            g.shared.model.lock().view_bank = 1;
+            g.edited = [0, 30];
         });
     }
 

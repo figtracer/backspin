@@ -263,6 +263,8 @@ fn curve(dib: &mut Dib, view: &EnvView, points: &[Point], colour: u32) {
     let line = swap_rb(colour) | 0xff00_0000;
     let base_y = view.y(0.0) as f32;
     let mut hist = [0.0f32; 6];
+    // The pen: the path starts at the first drawn pixel (segment 1 can be a vertical jump).
+    let mut pen: Option<f64> = None;
     dib.agg().line_width(1.5);
     dib.agg().reset_path();
     for i in 1..n {
@@ -271,7 +273,35 @@ fn curve(dib: &mut Dib, view: &EnvView, points: &[Point], colour: u32) {
         let x_i = rne(px[i]) as f64;
         let y_i = py[i] as f32;
         let dx = x_i - x_prev;
-        if x_i < -32.0 || (x1 + 32) as f64 <= x_prev || dx == 0.0 {
+        if x_i < -32.0 || (x1 + 32) as f64 <= x_prev {
+            continue;
+        }
+        if dx == 0.0 {
+            // Backspin addition: a vertical jump (two points at one x, as in gates and chops)
+            // is drawn as a vertical line, and the next segment starts from its end. Without
+            // this the column history averages the jump away and spikes lose their height.
+            let a = dib.agg();
+            a.line_color(line);
+            let x = pen.unwrap_or(x_i);
+            if pen.is_none() {
+                a.move_to(x, y_prev as f64);
+            }
+            a.line_to(x, y_i as f64);
+            pen = Some(x);
+            hist = [y_i, y_i, y_i, y_i, y_i, y_i];
+            let (t, b) = (y_prev.min(y_i), y_prev.max(y_i));
+            if t < base_y {
+                vspan_add(
+                    dib,
+                    t,
+                    t,
+                    b.min(base_y),
+                    b.min(base_y),
+                    x as i32,
+                    glow,
+                    0x100,
+                );
+            }
             continue;
         }
         let inv = 1.0 / dx;
@@ -289,7 +319,6 @@ fn curve(dib: &mut Dib, view: &EnvView, points: &[Point], colour: u32) {
         let xk = x_i - 5.960464477539063e-08;
         let tbase = xk * inv;
         let mut xx = start;
-        let mut first = true;
         while xx <= end {
             xx += 1.0;
             let v = if xx < xk {
@@ -314,12 +343,13 @@ fn curve(dib: &mut Dib, view: &EnvView, points: &[Point], colour: u32) {
             }
             let a = dib.agg();
             a.line_color(line);
-            if first && i == 1 {
+            if pen.is_none() {
                 a.move_to(xi as f64, ((hist[2] + hist[0]) * 0.5) as f64);
+                pen = Some(xi as f64);
             } else {
                 a.line_to((xi + 1) as f64, ((top + bot) * 0.5) as f64);
+                pen = Some((xi + 1) as f64);
             }
-            first = false;
         }
     }
     let a = dib.agg();
@@ -348,6 +378,49 @@ fn curve(dib: &mut Dib, view: &EnvView, points: &[Point], colour: u32) {
                 darken(c, 0x20),
             );
             disc(dib, x, y, 0.0, (2.65f64 - 0.5) as f32 + 0.5, alpha[i], c);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::NoText;
+
+    /// A chop that starts with a vertical jump (points 0 and 1 at one x) draws its whole line,
+    /// spikes at full height included.
+    #[test]
+    fn vertical_jumps_draw_the_line() {
+        let mut env = backspin_envelope::Envelope::default();
+        env.points.clear();
+        for k in 0..4 {
+            let dx = if k == 0 { 0.0 } else { 0.875 };
+            env.points.push(Point::new(dx, 0.0, 0.0, 0));
+            env.points.push(Point::new(0.0, 1.0, 0.0, 0));
+            env.points.push(Point::new(0.125, 0.0, 0.0, 0));
+        }
+        env.prepare();
+        let mut dib = Dib::new(ENV_W, ENV_H, 0);
+        let colour = 0xff9a3c;
+        paint_env(
+            &mut dib,
+            &EnvView::default(),
+            &env.points,
+            colour,
+            "",
+            &mut NoText,
+        );
+        // Each spike has line pixels near the top and halfway down its column.
+        for k in 0..4 {
+            let x = rne(k as f64 * 131.25);
+            let lit = |y: i32| {
+                (x - 2..=x + 3).any(|x| {
+                    let p = dib.pixel(x.clamp(0, ENV_W - 1), y);
+                    // The line colour dominates red; the background is blue-grey.
+                    (p >> 16 & 0xff) > (p & 0xff) + 40 || (p & 0xff) > (p >> 16 & 0xff) + 40
+                })
+            };
+            assert!(lit(20) && lit(250), "spike {k} at x {x} is not drawn");
         }
     }
 }
