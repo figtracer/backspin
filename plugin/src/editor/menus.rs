@@ -270,7 +270,9 @@ pub fn env_options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Re
             let mut close = false;
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
-                    ui.set_min_width(190.0);
+                    // A fixed width: separators would otherwise fill the popup and push the
+                    // other column out of the window.
+                    ui.set_width(190.0);
                     title(ui, "State");
                     let list = maps();
                     ui.add_enabled_ui(!list.is_empty(), |ui| {
@@ -384,7 +386,9 @@ pub fn env_options_menu(gui: &mut Gui, ui: &mut Ui, setter: &ParamSetter, r: &Re
                 });
                 ui.separator();
                 ui.vertical(|ui| {
-                    ui.set_min_width(190.0);
+                    // A fixed width: separators would otherwise fill the popup and push the
+                    // other column out of the window.
+                    ui.set_width(190.0);
                     title(ui, "Tools");
                     item(ui, false, "Insert point at locator", "");
                     if item(ui, true, "Flip vertically", "") {
