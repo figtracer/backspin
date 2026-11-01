@@ -11,7 +11,6 @@ use nih_plug::prelude::ParamSetter;
 use nih_plug_egui::egui::{
     self, CursorIcon, Id, Key, PointerButton, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2,
 };
-use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 
 /// The hit radius of points and tension handles (S(8)).
@@ -62,8 +61,6 @@ pub struct EnvState {
     drag: Drag,
     /// The point the point menu belongs to, and where it opened.
     pub point_menu: Option<(usize, Pos2)>,
-    /// The locator trail per group: past x positions, newest first.
-    trail: [VecDeque<f32>; 2],
 }
 
 impl EnvState {
@@ -799,32 +796,15 @@ fn draw(
             p.circle_filled(c, 9.0, rgba(0xffffff, 0x20));
         }
     }
-    // The playback locator with its fading trail.
+    // The playback locator: a single line, as in Gross Beat.
     let status = &gui.shared.status;
     let playing = status.playing.load(Ordering::Relaxed);
-    let trail = &mut gui.env.trail[group];
     if playing && status.active[group].load(Ordering::Relaxed) == index as i32 {
         let x = v.x(status.position(group));
-        trail.push_front(x);
-        trail.truncate(24);
-        let lc = lighten(gc, 0x40);
-        for (k, w) in trail.iter().zip(trail.iter().skip(1)).enumerate() {
-            let (x1, x0) = (*w.0, *w.1);
-            if x0 < x1 && x1 - x0 < v.r.width() * 0.5 {
-                let a = (0.82f32.powi(k as i32 + 1) * 128.0) as u8;
-                p.rect_filled(
-                    Rect::from_min_max(pos2(x0, v.r.min.y), pos2(x1, v.r.max.y)),
-                    0.0,
-                    alpha(lc, a / 3),
-                );
-            }
-        }
         p.line_segment(
             [pos2(x, v.r.min.y), pos2(x, v.r.max.y)],
-            Stroke::new(1.0f32, lc),
+            Stroke::new(1.0f32, lighten(gc, 0x40)),
         );
         super::frame::repaint_while_playing(ui.ctx());
-    } else {
-        trail.clear();
     }
 }
