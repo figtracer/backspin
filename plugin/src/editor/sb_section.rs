@@ -169,7 +169,7 @@ pub fn model(gui: &mut Gui) -> SbModel {
     if let Some(sec) = band.sections.first() {
         let lfo = &sec.lfo;
         if let Some(t) = &wave {
-            out.table = t.to_vec();
+            out.table = t.clone();
             out.points = lfo
                 .points
                 .iter()
