@@ -124,6 +124,15 @@ impl Clamp {
         self.os.grow(max_block);
     }
 
+    /// Clears the filter and meter state, for after bad samples went through: the oversampler
+    /// resets at the next block that is not bypassed, as after an OVERSAMPLING change. The
+    /// original never resets on its own; nothing here allocates.
+    pub fn reset(&mut self) {
+        self.reset_pending = true;
+        self.meter = Meter::default();
+        self.meter_rate = 0.0;
+    }
+
     /// The latency in samples to report to the host. Like the original and iPlug2's
     /// `OverSampler`, Clamp reports none: the oversampler's IIR filters are not linear phase and
     /// are not compensated. [`Clamp::group_delay`] gives their delay.

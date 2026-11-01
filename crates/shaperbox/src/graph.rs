@@ -906,6 +906,19 @@ fn process_shaper(
     }
 }
 
+/// Orders the pending triggers by time, keeping the order of equal times: a stable insertion
+/// sort, since the standard stable sort allocates for longer lists and this runs on the audio
+/// thread. The list is short in practice (the notes of one block plus the carry-over).
+fn sort_triggers(events: &mut [Trigger]) {
+    for i in 1..events.len() {
+        let mut j = i;
+        while j > 0 && events[j - 1].time > events[j].time {
+            events.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+}
+
 /// The ShaperBox section.
 pub struct Processor {
     sr: f32,
@@ -1160,7 +1173,7 @@ impl Processor {
                 Self::delay_line(&mut rt.input_delay, &mut pos, buf);
                 rt.input_pos = pos;
                 // The block in sub-blocks split at the pending triggers (0x460f54).
-                rt.events.sort_by_key(|e| e.time);
+                sort_triggers(&mut rt.events);
                 let lookahead = self.audio_lookahead + rt.chain + rt.lookahead;
                 let mut start = 0;
                 let mut i = 0;
